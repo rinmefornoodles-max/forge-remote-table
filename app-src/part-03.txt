@@ -1,0 +1,170 @@
+      el.style.zIndex=String(2+state.zones.battlefield.indexOf(id));
+      bf.appendChild(el);
+    }
+
+    const hand=$('#hand'); hand.innerHTML='';
+    for(const id of state.zones.hand) hand.appendChild(makeCardElement(id,'hand'));
+
+    const command=$('#command-preview'); command.innerHTML='';
+    if(state.zones.command.length){for(const id of state.zones.command.slice(-2)) command.appendChild(makeCardElement(id,'command',{preview:false}));}
+    else command.innerHTML='<span>Drop commander here</span>';
+    renderPreview($('#graveyard-preview'),'graveyard');
+    renderPreview($('#exile-preview'),'exile');
+    $('#library-count').textContent=state.zones.library.length;
+    $('#undo-btn').disabled=!history.length;
+    $('#redo-btn').disabled=!future.length;
+    if (!$('#tools-modal').hidden) $('#table-notes').value=state.notes || '';
+  }
+
+  function openInspector(id) {
+    const c=card(id); if(!c) return;
+    selectedId=id;
+    render();
+    const zone=zoneOf(id);
+    const image=currentCardImage(c);
+    const actions=[
+      ['Hand','hand'],['Battlefield','battlefield'],['Graveyard','graveyard'],['Exile','exile'],['Command','command'],['Library top','library-top'],['Library bottom','library-bottom']
+    ];
+    $('#inspector-content').innerHTML=`
+      <div class="inspector-layout">
+        <div>${image&&!c.faceDown?`<img class="inspector-image" src="${escapeHtml(image)}" alt="${escapeHtml(c.name)}"/>`:`<div class="card-fallback inspector-fallback"><strong>${escapeHtml(c.faceDown?'Face-down card':c.name)}</strong><small>${escapeHtml(c.typeLine)}</small><small>${escapeHtml(c.oracleText)}</small></div>`}</div>
+        <div class="inspector-meta">
+          <div class="eyebrow">${escapeHtml((zone||'outside').toUpperCase())}</div>
+          <h2 id="inspector-name">${escapeHtml(c.name)}</h2>
+          <div class="type-line">${escapeHtml(c.manaCost ? `${c.manaCost} · ${c.typeLine}` : c.typeLine)}</div>
+          ${(c.power||c.toughness)?`<p><strong>${escapeHtml(c.power||'?')}/${escapeHtml(c.toughness||'?')}</strong></p>`:''}
+          <div class="oracle-text">${escapeHtml(c.oracleText || 'No rules text loaded.')}</div>
+          <div class="action-section"><h3>Move anywhere</h3><div class="action-grid">${actions.map(([label,target])=>`<button data-inspector-move="${target}">${label}</button>`).join('')}</div></div>
+          <div class="action-section"><h3>Card state</h3><div class="action-grid">
+            <button data-inspector-action="tap">${c.tapped?'Untap':'Tap'}</button>
+            <button data-inspector-action="facedown">${c.faceDown?'Turn face up':'Turn face down'}</button>
+            <button data-inspector-action="transform" ${c.faces?.length>1?'':'disabled'}>Transform / flip</button>
+            <button data-inspector-action="plus">+1/+1 counter</button>
+            <button data-inspector-action="minus">-1/-1 counter</button>
+            <button data-inspector-action="counter">Custom counter</button>
+            <button data-inspector-action="copy">Make copy</button>
+            <button data-inspector-action="note">Card note</button>
+            <button data-inspector-action="delete" class="danger">Delete object</button>
+          </div></div>
+        </div>
+      </div>`;
+    openModal('inspector');
+  }
+
+  function toggleTapped(id) {
+    const c=card(id); if(!c) return;
+    checkpoint(); c.tapped=!c.tapped; render(); scheduleSave();
+  }
+
+  function inspectorAction(action) {
+    const c=card(selectedId); if(!c) return;
+    if(action==='tap') { checkpoint(); c.tapped=!c.tapped; }
+    else if(action==='facedown') { checkpoint(); c.faceDown=!c.faceDown; }
+    else if(action==='transform' && c.faces?.length>1) { checkpoint(); c.faceIndex=(c.faceIndex+1)%c.faces.length; }
+    else if(action==='plus') { checkpoint(); c.counters['+1/+1']=(Number(c.counters['+1/+1'])||0)+1; }
+    else if(action==='minus') { checkpoint(); c.counters['-1/-1']=(Number(c.counters['-1/-1'])||0)+1; }
+    else if(action==='counter') {
+      const name=prompt('Counter name:', 'counter'); if(!name) return;
+      const current=Number(c.counters[name])||0; const value=prompt(`Set “${name}” counters:`,String(current+1)); if(value===null) return;
+      const n=Number(value); if(!Number.isFinite(n)) return; checkpoint(); c.counters[name]=Math.trunc(n);
+    } else if(action==='copy') {
+      checkpoint(); const clone=makeInstance(deepCopy(c),{id:uid(),token:true,x:(Number(c.x)||25)+28,y:(Number(c.y)||25)+28,tapped:false});
+      addInstanceToState(clone,'battlefield'); logEvent(`Created a copy of ${c.name}.`);
+    } else if(action==='note') {
+      const value=prompt('Note for this card:',c.note||''); if(value===null)return; checkpoint(); c.note=value;
+    } else if(action==='delete') {
+      if(!confirm(`Delete ${c.name} from this table? You can Undo afterward.`)) return;
+      checkpoint(); removeFromZones(c.id); delete state.cards[c.id]; selectedId=null; closeModal('inspector');
+    }
+    render(); scheduleSave(); if(selectedId && card(selectedId)) openInspector(selectedId);
+  }
+
+  function openZone(zone, title=null, limit=null) {
+    zoneModalZone=zone;
+    zoneModalLimit=Number.isFinite(limit) ? limit : null;
+    $('#zone-modal-title').textContent=title || zone[0].toUpperCase()+zone.slice(1);
+    $('#zone-search').value='';
+    renderZoneModal(); openModal('zone-modal');
+  }
+
+  function renderZoneModal() {
+    const zone=zoneModalZone; if(!zone || !state.zones[zone]) return;
+    const query=$('#zone-search').value.trim().toLocaleLowerCase();
+    const ids=zoneModalLimit ? state.zones[zone].slice(0, zoneModalLimit) : state.zones[zone];
+    const grid=$('#zone-card-grid'); grid.innerHTML='';
+    const tools=$('#zone-modal-tools'); tools.innerHTML='';
+    if(zone==='library'){
+      tools.innerHTML='<button class="btn tiny" data-zone-tool="shuffle">Shuffle</button><button class="btn tiny ghost" data-zone-tool="draw">Draw 1</button><span class="muted-block">Top of library is first.</span>';
+    }
+    ids.forEach((id,index)=>{
+      const c=card(id); if(!c || (query&&!`${c.name} ${c.typeLine} ${c.oracleText}`.toLocaleLowerCase().includes(query))) return;
+      const tile=document.createElement('div'); tile.className='zone-tile';
+      const ce=makeCardElement(id,zone,{preview:false}); ce.style.width='100%'; ce.style.height='auto'; ce.style.aspectRatio='488/680';
+      tile.appendChild(ce); const ix=document.createElement('div'); ix.className='zone-index'; ix.textContent=zone==='library'?`#${index+1} from top`:zone; tile.appendChild(ix); grid.appendChild(tile);
+    });
+    if(!grid.children.length) grid.innerHTML='<p class="muted-block">No matching cards.</p>';
+  }
+
+  async function addAnyCard() {
+    const name=$('#add-card-name').value.trim(); const status=$('#add-card-status');
+    if(!name) return setStatus(status,'Enter a card name.','error');
+    setStatus(status,'Searching Scryfall…'); $('#add-card-submit').disabled=true;
+    try{
+      const res=await fetch(`${SCRYFALL_NAMED}?fuzzy=${encodeURIComponent(name)}`);
+      if(!res.ok) throw new Error('Card not found');
+      const data=await res.json();
+      const instance=makeInstance(cardTemplate(data,name),{outsideDeck:true});
+      let target=$('#add-card-zone').value; let placement='bottom';
+      if(target==='library-top'){target='library';placement='top';}
+      if(target==='library-bottom'){target='library';placement='bottom';}
+      checkpoint(); addInstanceToState(instance,target,placement);
+      if(target==='battlefield'){instance.x=40;instance.y=40;}
+      logEvent(`Added ${instance.name} to ${target}.`); render(); scheduleSave(); closeModal('add-card-modal'); toast(`${instance.name} added.`);
+    }catch(err){setStatus(status,err.message||'Card not found.','error');}
+    finally{$('#add-card-submit').disabled=false;}
+  }
+
+  function createToken() {
+    const name=$('#token-name').value.trim()||'Custom Token';
+    const c=makeInstance({name,typeLine:'Token',oracleText:$('#token-text').value.trim(),power:$('#token-power').value.trim(),toughness:$('#token-toughness').value.trim(),token:true,custom:true},{x:50,y:50});
+    checkpoint(); addInstanceToState(c,'battlefield'); logEvent(`Created ${name}.`); render(); scheduleSave(); closeModal('token-modal');
+    $('#token-name').value=''; $('#token-power').value=''; $('#token-toughness').value=''; $('#token-text').value='';
+  }
+
+  function renderDamage() {
+    const root=$('#damage-list'); root.innerHTML='';
+    state.damage.forEach((row,index)=>{
+      const el=document.createElement('div'); el.className='damage-row';
+      el.innerHTML=`<input data-damage-name="${index}" value="${escapeHtml(row.name||'Opponent commander')}" aria-label="Commander name"><div class="damage-control"><button data-damage-delta="-1" data-index="${index}">−</button><strong>${Number(row.value)||0}</strong><button data-damage-delta="1" data-index="${index}">+</button><button data-damage-remove="${index}" title="Remove">×</button></div>`;
+      root.appendChild(el);
+    });
+    if(!state.damage.length) root.innerHTML='<p class="muted-block">Add a commander when you need to track damage received from it.</p>';
+  }
+
+  function newGameSameDeck() {
+    if(!confirm('Start a fresh game with this same deck? Tokens/custom added cards are removed. You can Undo once afterward.')) return;
+    checkpoint();
+    const commanderIds = [];
+    const all=[];
+    for(const [id,c] of Object.entries(state.cards)) {
+      if(c.token || c.custom || c.outsideDeck) { delete state.cards[id]; continue; }
+      c.tapped=false;c.faceDown=false;c.counters={};c.x=null;c.y=null;c.note='';c.faceIndex=0;
+      if(state.commanderName && c.name.toLocaleLowerCase()===state.commanderName.toLocaleLowerCase() && !commanderIds.length) commanderIds.push(id); else all.push(id);
+    }
+    state.zones={library:all,hand:[],battlefield:[],graveyard:[],exile:[],command:commanderIds};
+    state.life=40;state.poison=0;state.energy=0;state.commanderTax=0;state.turn=1;state.damage=state.damage.map(d=>({...d,value:0}));
+    const a=state.zones.library;for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
+    for(let i=0;i<7&&a.length;i++)state.zones.hand.push(a.shift());
+    logEvent('Started a new game with the same deck.'); closeModal('tools-modal'); render(); scheduleSave();
+  }
+
+  function exportGame() {
+    const payload=JSON.stringify(state,null,2); const blob=new Blob([payload],{type:'application/json'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`${(state.deckName||'forge-remote').replace(/[^a-z0-9_-]+/gi,'-').replace(/-+/g,'-')}-game.json`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
+  async function importGameFile(file) {
+    if(!file)return;
+    try{const raw=JSON.parse(await file.text());state=normalizeLoadedState(raw);state.started=true;history=[];future=[];showApp();render();scheduleSave();toast('Saved game imported.');}
+    catch(err){toast('That file is not a valid Forge Remote Table save.','error');}
+  }
