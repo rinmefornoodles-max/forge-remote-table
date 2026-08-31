@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1110" />
+  <meta name="description" content="A freeform single-player Commander tabletop for screen-shared long-distance Magic games." />
+  <title>Forge Remote Table</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="start-screen" class="start-screen">
+    <main class="start-card">
+      <div class="brand-row">
+        <div class="forge-mark" aria-hidden="true">⚒</div>
+        <div>
+          <div class="eyebrow">COMMANDER FORGE COMPANION</div>
+          <h1>Forge Remote Table</h1>
+        </div>
+      </div>
+      <p class="tagline">Your cards. Your calls. No rules enforcement.</p>
+      <p class="start-copy">Built for long-distance Commander when one player has the real cards and the other shares this digital tabletop. Everything is manual on purpose.</p>
+
+      <div class="feature-strip" aria-label="Core features">
+        <span>Single player</span><span>Screen-share ready</span><span>Any decklist</span><span>Freeform actions</span><span>Local autosave</span>
+      </div>
+
+      <section class="setup-panel">
+        <div class="setup-heading-row">
+          <div>
+            <h2>Load a deck</h2>
+            <p>Paste a normal deck export. Section headers from Moxfield, Archidekt, MTGGoldfish, and similar lists are okay.</p>
+          </div>
+          <button id="precon-open" class="btn ghost" type="button">Official precons</button>
+        </div>
+
+        <div class="setup-grid">
+          <label>Deck name
+            <input id="deck-name" type="text" placeholder="Friday night deck" autocomplete="off" />
+          </label>
+          <label>Commander <span class="muted">(optional)</span>
+            <input id="commander-name" type="text" placeholder="Auto-detect from Commander section" autocomplete="off" />
+          </label>
+        </div>
+        <label class="decklist-label">Decklist
+          <textarea id="decklist-input" spellcheck="false" placeholder="Commander\n1 Satoru Umezawa\n\nCreatures\n1 Changeling Outcast\n1 Archon of Cruelty\n...\n\nLands\n8 Island"></textarea>
+        </label>
+        <div id="setup-status" class="status" role="status" aria-live="polite"></div>
+        <div class="setup-actions">
+          <button id="load-deck" class="btn primary" type="button">Load deck &amp; draw 7</button>
+          <button id="continue-game" class="btn" type="button" hidden>Continue saved table</button>
+          <label class="btn ghost file-btn">Import saved game<input id="import-state-file" type="file" accept="application/json,.json" hidden /></label>
+        </div>
+      </section>
+
+      <div class="start-footer">
+        <span>Card data and images are requested from Scryfall.</span>
+        <span>Not affiliated with Wizards of the Coast.</span>
+      </div>
+    </main>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="topbar-brand">
+        <button id="home-btn" class="icon-btn" title="Back to deck loader" aria-label="Back to deck loader">⚒</button>
+        <div><strong>Forge Remote Table</strong><span id="deck-title">Remote Commander</span></div>
+      </div>
+
+      <div class="life-cluster" aria-label="Life total">
+        <button data-life="-5" class="life-step" type="button">−5</button>
+        <button data-life="-1" class="life-step" type="button">−</button>
+        <button id="life-total" class="life-total" type="button" title="Click to set life">40</button>
+        <button data-life="1" class="life-step" type="button">+</button>
+        <button data-life="5" class="life-step" type="button">+5</button>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="undo-btn" class="btn tiny ghost" type="button" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
+        <button id="redo-btn" class="btn tiny ghost" type="button" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
+        <button id="tools-btn" class="btn tiny" type="button">Tools</button>
+        <button id="export-btn" class="btn tiny ghost" type="button">Export game</button>
+      </div>
+    </header>
+
+    <section class="tracker-bar">
+      <div class="tracker"><span>Turn</span><button id="turn-minus" type="button">−</button><strong id="turn-value">1</strong><button id="turn-plus" type="button">+</button></div>
+      <div class="tracker"><span>Poison</span><button data-counter="poison" data-delta="-1" type="button">−</button><strong id="poison-value">0</strong><button data-counter="poison" data-delta="1" type="button">+</button></div>
+      <div class="tracker"><span>Energy</span><button data-counter="energy" data-delta="-1" type="button">−</button><strong id="energy-value">0</strong><button data-counter="energy" data-delta="1" type="button">+</button></div>
+      <div class="tracker"><span>Commander tax</span><button data-counter="commanderTax" data-delta="-2" type="button">−</button><strong id="tax-value">0</strong><button data-counter="commanderTax" data-delta="2" type="button">+</button></div>
+      <button id="damage-btn" class="tracker tracker-button" type="button"><span>Commander damage</span><strong id="damage-summary">Track</strong></button>
+      <button id="next-turn" class="btn primary compact" type="button">Untap + next turn</button>
+    </section>
+
+    <main class="table-shell">
+      <aside class="zone-rail left-rail">
+        <section id="command-zone" class="zone-card drop-zone" data-drop-zone="command">
+          <div class="zone-heading"><span>Command</span><strong id="command-count">0</strong></div>
+          <div id="command-preview" class="zone-preview"></div>
+        </section>
+
+        <section id="library-zone" class="zone-card library-zone drop-zone" data-drop-zone="library">
+          <div class="zone-heading"><span>Library</span><strong id="library-count">0</strong></div>
+          <button id="library-pile" class="library-pile" type="button" aria-label="Open library tools"><span>FORGE</span><small>LIBRARY</small></button>
+          <div class="pile-actions">
+            <button id="draw-one" type="button">Draw</button>
+            <button id="draw-many" type="button">Draw N</button>
+            <button id="shuffle-library" type="button">Shuffle</button>
+            <button id="search-library" type="button">Search</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="battlefield-wrap">
+        <div class="battlefield-toolbar">
+          <div>
+            <strong>Battlefield</strong>
+            <span>Drag cards anywhere. Double-click a permanent to tap/untap.</span>
+          </div>
+          <div class="battlefield-actions">
+            <button id="untap-all" class="btn tiny ghost" type="button">Untap all</button>
+            <button id="add-card-btn" class="btn tiny" type="button">+ Any card</button>
+            <button id="token-btn" class="btn tiny" type="button">+ Token</button>
+          </div>
+        </div>
+        <div id="battlefield" class="battlefield drop-zone" data-drop-zone="battlefield" tabindex="0" aria-label="Battlefield"></div>
+      </section>
+
+      <aside class="zone-rail right-rail">
+        <section id="graveyard-zone" class="zone-card drop-zone" data-drop-zone="graveyard">
+          <div class="zone-heading"><span>Graveyard</span><strong id="graveyard-count">0</strong></div>
+          <button id="graveyard-preview" class="zone-preview clickable" type="button" aria-label="Open graveyard"></button>
+        </section>
+        <section id="exile-zone" class="zone-card drop-zone" data-drop-zone="exile">
+          <div class="zone-heading"><span>Exile</span><strong id="exile-count">0</strong></div>
+          <button id="exile-preview" class="zone-preview clickable" type="button" aria-label="Open exile"></button>
+        </section>
+        <section class="zone-card quick-zone">
+          <div class="zone-heading"><span>Quick actions</span></div>
+          <div class="quick-actions">
+            <button id="mill-btn" type="button">Mill N</button>
+            <button id="exile-top-btn" type="button">Exile top N</button>
+            <button id="peek-btn" type="button">Look at top N</button>
+            <button id="mulligan-btn" type="button">Redraw hand</button>
+            <button id="roll-btn" type="button">Roll dice</button>
+            <button id="coin-btn" type="button">Flip coin</button>
+          </div>
+          <div id="random-result" class="random-result"></div>
+        </section>
+      </aside>
+    </main>
+
+    <section class="hand-shell drop-zone" data-drop-zone="hand">
+      <div class="hand-heading">
+        <div><strong>Your hand</strong><span id="hand-count">0 cards</span></div>
+        <div class="hand-actions"><button id="sort-hand" class="btn tiny ghost" type="button">Sort by name</button><button id="hand-zone-btn" class="btn tiny ghost" type="button">List view</button></div>
+      </div>
+      <div id="hand" class="hand"></div>
+    </section>
+  </div>
+
+  <div id="inspector" class="modal-backdrop" hidden>
+    <section class="modal inspector-modal" role="dialog" aria-modal="true" aria-labelledby="inspector-name">
+      <button class="modal-close" data-close-modal="inspector" type="button" aria-label="Close">×</button>
+      <div id="inspector-content"></div>
+    </section>
+  </div>
+
+  <div id="zone-modal" class="modal-backdrop" hidden>
+    <section class="modal zone-modal" role="dialog" aria-modal="true" aria-labelledby="zone-modal-title">
+      <button class="modal-close" data-close-modal="zone-modal" type="button" aria-label="Close">×</button>
+      <div class="modal-heading-row"><div><div class="eyebrow">ZONE VIEW</div><h2 id="zone-modal-title">Zone</h2></div><input id="zone-search" type="search" placeholder="Filter cards…" /></div>
+      <div id="zone-modal-tools" class="zone-modal-tools"></div>
+      <div id="zone-card-grid" class="zone-card-grid"></div>
+    </section>
+  </div>
+
+  <div id="tools-modal" class="modal-backdrop" hidden>
+    <section class="modal tools-modal" role="dialog" aria-modal="true" aria-labelledby="tools-title">
+      <button class="modal-close" data-close-modal="tools-modal" type="button" aria-label="Close">×</button>
+      <div class="eyebrow">FREEFORM TABLE TOOLS</div><h2 id="tools-title">Table tools</h2>
+      <div class="tool-grid">
+        <button id="tool-add-card" class="tool-tile" type="button"><strong>Add any card</strong><span>Search Scryfall and put a card in any zone.</span></button>
+        <button id="tool-token" class="tool-tile" type="button"><strong>Create token / marker</strong><span>Make a custom token, emblem, copy, or reminder card.</span></button>
+        <button id="tool-search-library" class="tool-tile" type="button"><strong>Search library</strong><span>See the whole library and manually move cards.</span></button>
+        <button id="tool-shuffle" class="tool-tile" type="button"><strong>Shuffle library</strong><span>Randomize the current library only.</span></button>
+        <button id="tool-reset-trackers" class="tool-tile" type="button"><strong>Reset trackers</strong><span>Life 40, poison 0, energy 0, tax 0, turn 1.</span></button>
+        <button id="tool-new-game" class="tool-tile danger" type="button"><strong>New game with same deck</strong><span>Return all non-token cards, shuffle, commander to command zone, draw 7.</span></button>
+      </div>
+      <label class="notes-label">Shared-table notes<textarea id="table-notes" placeholder="Floating mana, delayed triggers, promises, revealed cards, anything you want to remember…"></textarea></label>
+    </section>
+  </div>
+
+  <div id="add-card-modal" class="modal-backdrop" hidden>
+    <section class="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="add-card-title">
+      <button class="modal-close" data-close-modal="add-card-modal" type="button" aria-label="Close">×</button>
+      <div class="eyebrow">UNRESTRICTED ADD</div><h2 id="add-card-title">Add any Magic card</h2>
+      <p class="muted-block">Useful for stolen cards, wished-for cards, copies, cards created by effects, or anything not in the original deck.</p>
+      <label>Card name<input id="add-card-name" type="text" placeholder="Sol Ring" autocomplete="off" /></label>
+      <label>Put it in<select id="add-card-zone"><option value="hand">Hand</option><option value="battlefield">Battlefield</option><option value="graveyard">Graveyard</option><option value="exile">Exile</option><option value="command">Command zone</option><option value="library-top">Top of library</option><option value="library-bottom">Bottom of library</option></select></label>
+      <div id="add-card-status" class="status"></div>
+      <button id="add-card-submit" class="btn primary full" type="button">Find &amp; add card</button>
+    </section>
+  </div>
+
+  <div id="token-modal" class="modal-backdrop" hidden>
+    <section class="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="token-title">
+      <button class="modal-close" data-close-modal="token-modal" type="button" aria-label="Close">×</button>
+      <div class="eyebrow">FREEFORM OBJECT</div><h2 id="token-title">Create token / marker</h2>
+      <label>Name<input id="token-name" type="text" placeholder="Treasure" /></label>
+      <div class="two-col"><label>Power<input id="token-power" type="text" placeholder="1" /></label><label>Toughness<input id="token-toughness" type="text" placeholder="1" /></label></div>
+      <label>Rules / reminder text<textarea id="token-text" placeholder="Sacrifice this artifact: Add one mana of any color."></textarea></label>
+      <button id="token-submit" class="btn primary full" type="button">Create on battlefield</button>
+    </section>
+  </div>
+
+  <div id="damage-modal" class="modal-backdrop" hidden>
+    <section class="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="damage-title">
+      <button class="modal-close" data-close-modal="damage-modal" type="button" aria-label="Close">×</button>
+      <div class="eyebrow">TRACKER</div><h2 id="damage-title">Commander damage received</h2>
+      <div id="damage-list" class="damage-list"></div>
+      <button id="add-damage-source" class="btn full" type="button">+ Add opponent commander</button>
+    </section>
+  </div>
+
+  <div id="precon-modal" class="modal-backdrop" hidden>
+    <section class="modal precon-modal" role="dialog" aria-modal="true" aria-labelledby="precon-title">
+      <button class="modal-close" data-close-modal="precon-modal" type="button" aria-label="Close">×</button>
+      <div class="modal-heading-row"><div><div class="eyebrow">OFFICIAL COMMANDER DECKS</div><h2 id="precon-title">Choose a precon</h2></div><input id="precon-search" type="search" placeholder="Search deck name, set, or year…" /></div>
+      <div id="precon-status" class="status"></div>
+      <div id="precon-list" class="precon-list"></div>
+    </section>
+  </div>
+
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
