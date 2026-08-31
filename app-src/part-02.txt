@@ -1,0 +1,170 @@
+  function removeFromZones(id) {
+    for (const zone of ZONES) {
+      const i = state.zones[zone].indexOf(id);
+      if (i >= 0) state.zones[zone].splice(i,1);
+    }
+  }
+
+  function moveCard(id, targetZone, opts={}) {
+    const c = card(id);
+    if (!c) return;
+    const origin = zoneOf(id);
+    if (!ZONES.includes(targetZone)) return;
+    if (opts.checkpoint !== false) checkpoint();
+    removeFromZones(id);
+    c.tapped = targetZone === 'battlefield' ? c.tapped : false;
+    if (targetZone !== 'battlefield') { c.x = null; c.y = null; }
+    if (targetZone === 'library') {
+      if (opts.placement === 'bottom') state.zones.library.push(id);
+      else state.zones.library.unshift(id);
+    } else {
+      state.zones[targetZone].push(id);
+    }
+    if (targetZone === 'battlefield') {
+      const bf = $('#battlefield');
+      const defaultX = 24 + ((state.zones.battlefield.length - 1) % 6) * 136;
+      const defaultY = 25 + Math.floor((state.zones.battlefield.length - 1) / 6) * 187;
+      c.x = Number.isFinite(opts.x) ? opts.x : defaultX;
+      c.y = Number.isFinite(opts.y) ? opts.y : defaultY;
+    }
+    logEvent(`${c.name}: ${origin || 'outside'} → ${targetZone}${targetZone==='library' ? ` (${opts.placement || 'top'})` : ''}.`);
+    render();
+    scheduleSave();
+  }
+
+  function drawCards(n=1, doCheckpoint=true) {
+    const amount = clamp(Number(n)||0,0,100);
+    if (!amount) return;
+    if (doCheckpoint) checkpoint();
+    let drawn = 0;
+    while (drawn < amount && state.zones.library.length) {
+      const id = state.zones.library.shift();
+      state.zones.hand.push(id);
+      drawn++;
+    }
+    logEvent(`Drew ${drawn} card${drawn===1?'':'s'}.`);
+    render(); scheduleSave();
+    if (drawn < amount) toast(`Only ${drawn} card${drawn===1?' was':'s were'} left in the library.`, 'error');
+  }
+
+  function shuffleLibrary(doCheckpoint=true) {
+    if (doCheckpoint) checkpoint();
+    const a = state.zones.library;
+    for (let i=a.length-1;i>0;i--) {
+      const j=Math.floor(Math.random()*(i+1));
+      [a[i],a[j]]=[a[j],a[i]];
+    }
+    logEvent('Shuffled the library.');
+    render(); scheduleSave();
+    if (doCheckpoint) toast('Library shuffled.');
+  }
+
+  function moveTopN(target, n) {
+    const amount = clamp(Number(n)||0,0,100);
+    if (!amount) return;
+    checkpoint();
+    let moved=0;
+    while (moved<amount && state.zones.library.length) {
+      const id=state.zones.library.shift();
+      state.zones[target].push(id); moved++;
+    }
+    logEvent(`${target==='graveyard'?'Milled':'Exiled'} ${moved} from the top.`);
+    render(); scheduleSave();
+  }
+
+  function redrawHand() {
+    if (!state.zones.hand.length) return toast('Your hand is empty.');
+    const count = state.zones.hand.length;
+    checkpoint();
+    for (const id of [...state.zones.hand]) {
+      removeFromZones(id); state.zones.library.push(id);
+    }
+    const a=state.zones.library;
+    for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
+    for(let i=0;i<count && state.zones.library.length;i++) state.zones.hand.push(state.zones.library.shift());
+    logEvent(`Redrew a ${count}-card hand (manual/freeform mulligan).`);
+    render(); scheduleSave(); toast(`Redrew ${count} cards. Bottom cards manually if your mulligan requires it.`);
+  }
+
+  function untapAll(advance=false) {
+    checkpoint();
+    for (const id of state.zones.battlefield) { const c=card(id); if(c) c.tapped=false; }
+    if (advance) state.turn = Math.max(1, Number(state.turn||1)+1);
+    logEvent(advance ? `Untapped all and advanced to turn ${state.turn}.` : 'Untapped all permanents.');
+    render(); scheduleSave();
+  }
+
+  function changeTracker(key, delta) {
+    checkpoint();
+    state[key] = Math.max(0, Number(state[key]||0)+delta);
+    render(); scheduleSave();
+  }
+
+  function setLife() {
+    const value = prompt('Set life total:', String(state.life));
+    if (value === null) return;
+    const next = Number(value);
+    if (!Number.isFinite(next)) return;
+    checkpoint(); state.life = Math.trunc(next); render(); scheduleSave();
+  }
+
+  function makeCardElement(id, zone, {preview=false}={}) {
+    const c=card(id); if(!c) return document.createElement('div');
+    const el=document.createElement(zone==='hand' || zone==='battlefield' ? 'div':'div');
+    el.className=`remote-card${c.tapped?' tapped':''}${c.faceDown?' face-down':''}${selectedId===id?' selected':''}`;
+    el.dataset.cardId=id;
+    el.draggable=!preview;
+    el.title = `${c.name}${c.tapped?' (tapped)':''}`;
+    if (c.image && !c.custom) {
+      const img=document.createElement('img'); img.src=currentCardImage(c); img.alt=c.name; img.loading='lazy'; img.draggable=false; el.appendChild(img);
+    } else {
+      const fallback=document.createElement('div'); fallback.className='card-fallback';
+      fallback.innerHTML=`<strong>${escapeHtml(c.name)}</strong><small>${escapeHtml(c.typeLine || (c.token?'Token':'Custom card'))}</small><small>${escapeHtml(c.oracleText || c.note || '')}</small>${(c.power||c.toughness)?`<span class="pt">${escapeHtml(c.power||'?')}/${escapeHtml(c.toughness||'?')}</span>`:''}`;
+      el.appendChild(fallback);
+    }
+    if (c.token) { const r=document.createElement('span'); r.className='token-ribbon'; r.textContent='TOKEN'; el.appendChild(r); }
+    const counters=Object.entries(c.counters||{}).filter(([,v])=>Number(v)!==0);
+    if(counters.length){const badges=document.createElement('div');badges.className='counter-badges';for(const [name,value] of counters){const b=document.createElement('span');b.className='counter-badge';b.textContent=`${name} ${value>0?'+':''}${value}`;badges.appendChild(b);}el.appendChild(badges);}
+    if (!preview) {
+      el.addEventListener('dragstart', e => { draggedId=id; e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain',id); setTimeout(()=>el.style.opacity='.35',0); });
+      el.addEventListener('dragend', () => { draggedId=null; el.style.opacity=''; $$('.drag-over').forEach(x=>x.classList.remove('drag-over')); });
+      el.addEventListener('click', e => { e.stopPropagation(); openInspector(id); });
+      el.addEventListener('dblclick', e => { e.preventDefault(); e.stopPropagation(); toggleTapped(id); });
+    }
+    return el;
+  }
+
+  function currentCardImage(c) {
+    if (c.faces?.length) return c.faces[c.faceIndex]?.image || c.image || '';
+    return c.image || '';
+  }
+
+  function renderPreview(container, zone) {
+    container.innerHTML='';
+    const ids=state.zones[zone];
+    if(!ids.length){container.innerHTML='<span>Empty</span>';return;}
+    const id=ids[ids.length-1];
+    container.appendChild(makeCardElement(id,zone,{preview:true}));
+  }
+
+  function render() {
+    if (!state.started) return;
+    $('#deck-title').textContent=state.deckName || 'Remote Commander';
+    $('#life-total').textContent=state.life;
+    $('#turn-value').textContent=state.turn;
+    $('#poison-value').textContent=state.poison;
+    $('#energy-value').textContent=state.energy;
+    $('#tax-value').textContent=state.commanderTax;
+    $('#damage-summary').textContent=state.damage.length ? `${Math.max(0,...state.damage.map(x=>Number(x.value)||0))} max` : 'Track';
+    for(const zone of ZONES) {
+      const countEl=document.getElementById(`${zone}-count`);
+      if(countEl) countEl.textContent=state.zones[zone].length;
+    }
+    $('#hand-count').textContent=`${state.zones.hand.length} card${state.zones.hand.length===1?'':'s'}`;
+
+    const bf=$('#battlefield'); bf.innerHTML='';
+    for(const id of state.zones.battlefield){
+      const c=card(id); if(!c) continue;
+      const el=makeCardElement(id,'battlefield');
+      el.style.position='absolute';
+      el.style.left=`${Math.max(0,Number(c.x)||0)}px`; el.style.top=`${Math.max(0,Number(c.y)||0)}px`;
