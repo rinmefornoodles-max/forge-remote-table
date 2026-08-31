@@ -1,0 +1,157 @@
+
+  function showApp(){ $('#start-screen').hidden=true; $('#app').hidden=false; window.scrollTo(0,0); }
+  function showStart(){ $('#app').hidden=true; $('#start-screen').hidden=false; closeAllModals(); updateContinueButton(); }
+  function continueSaved(){
+    try{const raw=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');if(!raw?.started)return;state=normalizeLoadedState(raw);history=[];future=[];showApp();render();}
+    catch{toast('Saved table could not be opened.','error');}
+  }
+
+  async function loadPreconIndex() {
+    const status=$('#precon-status'); const list=$('#precon-list');
+    setStatus(status,'Loading Commander Forge official-precon catalog…'); list.innerHTML='';
+    try{
+      const res=await fetch(PRECON_INDEX_URL,{cache:'no-store'}); if(!res.ok)throw new Error(`Catalog unavailable (${res.status})`);
+      const payload=await res.json();
+      preconRows = payload.decks || payload.items || payload.data || (Array.isArray(payload)?payload:[]);
+      if(!Array.isArray(preconRows)) preconRows=[];
+      setStatus(status,`${preconRows.length} official deck entries available.`,'success'); renderPreconList();
+    }catch(err){setStatus(status,'The live precon catalog could not be reached. You can still paste any decklist.','error');}
+  }
+
+  function renderPreconList() {
+    const q=$('#precon-search').value.trim().toLocaleLowerCase(); const root=$('#precon-list');root.innerHTML='';
+    const rows=preconRows.filter(row=>!q||JSON.stringify([row.name,row.commanderNames,row.releaseDate,row.code]).toLocaleLowerCase().includes(q)).slice(0,160);
+    for(const row of rows){
+      const el=document.createElement('div');el.className='precon-item';
+      const commanders=Array.isArray(row.commanderNames)?row.commanderNames.join(' / '):(row.commander||'');
+      el.innerHTML=`<div><strong>${escapeHtml(row.name||'Commander deck')}</strong><span>${escapeHtml(commanders)}${row.releaseDate?` · ${escapeHtml(row.releaseDate)}`:''}</span></div><button class="btn tiny primary" type="button">Use deck</button>`;
+      el.querySelector('button').addEventListener('click',()=>loadPrecon(row)); root.appendChild(el);
+    }
+    if(!rows.length)root.innerHTML='<p class="muted-block">No matching precons.</p>';
+  }
+
+  async function loadPrecon(row) {
+    const status=$('#precon-status'); setStatus(status,`Loading ${row.name||'deck'}…`);
+    const file=row.localFile || row.file || row.path || row.outputFile || row.slug;
+    if(!file){setStatus(status,'This catalog row did not include a deck file. Paste a decklist instead.','error');return;}
+    try{
+      const url=/^https?:/i.test(file)?file:`${PRECON_BASE_URL}${file}`;
+      const res=await fetch(url,{cache:'no-store'});if(!res.ok)throw new Error(`Deck file unavailable (${res.status})`);const payload=await res.json();
+      const deck=payload?.data || payload;
+      const entries=deck.entries||deck.cards||[];
+      const lines=[];
+      const commanders=deck.commanderNames||row.commanderNames||[];
+      if(commanders.length){lines.push('Commander',...commanders.map(name=>`1 ${name}`),'');}
+      lines.push('Deck');
+      for(const e of entries){
+        const name=typeof e==='string'?e:e.name; const qty=typeof e==='string'?1:(e.count||e.quantity||1); if(!name)continue;
+        // Avoid double-counting commander rows if the precon file also includes them in entries.
+        const isCommander=commanders.some(c=>c.toLocaleLowerCase()===String(name).toLocaleLowerCase());
+        if(isCommander) continue;
+        lines.push(`${qty} ${name}`);
+      }
+      $('#deck-name').value=deck.name||row.name||'Official precon';
+      $('#commander-name').value=commanders[0]||'';
+      $('#decklist-input').value=lines.join('\n');
+      closeModal('precon-modal'); setStatus($('#setup-status'),`${deck.name||row.name} loaded into the deck box. Click “Load deck & draw 7”.`,'success');
+    }catch(err){setStatus(status,`Could not load that precon: ${err.message||err}`,'error');}
+  }
+
+  function wireDropZones() {
+    $$('.drop-zone').forEach(el=>{
+      el.addEventListener('dragover',e=>{if(!draggedId)return;e.preventDefault();e.dataTransfer.dropEffect='move';el.classList.add('drag-over');});
+      el.addEventListener('dragleave',e=>{if(!el.contains(e.relatedTarget))el.classList.remove('drag-over');});
+      el.addEventListener('drop',e=>{
+        e.preventDefault();el.classList.remove('drag-over');const id=draggedId||e.dataTransfer.getData('text/plain');if(!id||!card(id))return;
+        let zone=el.dataset.dropZone;
+        if(zone==='battlefield'){
+          const rect=$('#battlefield').getBoundingClientRect();const c=card(id);const x=e.clientX-rect.left-61+$('#battlefield').scrollLeft;const y=e.clientY-rect.top-85+$('#battlefield').scrollTop;
+          if(zoneOf(id)==='battlefield'){
+            checkpoint();c.x=Math.max(0,x);c.y=Math.max(0,y);render();scheduleSave();
+          } else moveCard(id,'battlefield',{x:Math.max(0,x),y:Math.max(0,y)});
+        } else if(zone==='library') moveCard(id,'library',{placement:'top'}); else moveCard(id,zone);
+      });
+    });
+  }
+
+  function wireEvents() {
+    $('#load-deck').addEventListener('click',loadDeckFromText);
+    $('#continue-game').addEventListener('click',continueSaved);
+    $('#home-btn').addEventListener('click',showStart);
+    $('#import-state-file').addEventListener('change',e=>importGameFile(e.target.files?.[0]));
+    $('#export-btn').addEventListener('click',exportGame);
+    $('#undo-btn').addEventListener('click',undo); $('#redo-btn').addEventListener('click',redo);
+    $('#life-total').addEventListener('click',setLife);
+    $$('[data-life]').forEach(b=>b.addEventListener('click',()=>{checkpoint();state.life+=Number(b.dataset.life);render();scheduleSave();}));
+    $$('[data-counter]').forEach(b=>b.addEventListener('click',()=>changeTracker(b.dataset.counter,Number(b.dataset.delta))));
+    $('#turn-minus').addEventListener('click',()=>{checkpoint();state.turn=Math.max(1,state.turn-1);render();scheduleSave();});
+    $('#turn-plus').addEventListener('click',()=>{checkpoint();state.turn+=1;render();scheduleSave();});
+    $('#next-turn').addEventListener('click',()=>untapAll(true)); $('#untap-all').addEventListener('click',()=>untapAll(false));
+    $('#draw-one').addEventListener('click',()=>drawCards(1)); $('#draw-many').addEventListener('click',()=>{const n=prompt('Draw how many?','2');if(n!==null)drawCards(n);});
+    $('#shuffle-library').addEventListener('click',()=>shuffleLibrary(true)); $('#search-library').addEventListener('click',()=>openZone('library','Search library'));
+    $('#library-pile').addEventListener('click',()=>openZone('library','Library'));
+    $('#graveyard-preview').addEventListener('click',()=>openZone('graveyard')); $('#exile-preview').addEventListener('click',()=>openZone('exile'));
+    $('#command-zone').addEventListener('click',e=>{if(e.target.closest('.remote-card'))return;if(state.zones.command.length)openZone('command');});
+    $('#hand-zone-btn').addEventListener('click',()=>openZone('hand'));
+    $('#sort-hand').addEventListener('click',()=>{checkpoint();state.zones.hand.sort((a,b)=>(card(a)?.name||'').localeCompare(card(b)?.name||''));render();scheduleSave();});
+    $('#mill-btn').addEventListener('click',()=>{const n=prompt('Mill how many cards?','1');if(n!==null)moveTopN('graveyard',n);});
+    $('#exile-top-btn').addEventListener('click',()=>{const n=prompt('Exile how many from the top?','1');if(n!==null)moveTopN('exile',n);});
+    $('#peek-btn').addEventListener('click',()=>{const n=clamp(Number(prompt('Look at how many cards from the top?','3'))||0,0,30);if(n)openZone('library',`Top ${n} cards`,n);});
+    $('#mulligan-btn').addEventListener('click',redrawHand);
+    $('#roll-btn').addEventListener('click',()=>{const sides=clamp(Number(prompt('How many sides?','20'))||20,2,1000);$('#random-result').textContent=`d${sides}: ${1+Math.floor(Math.random()*sides)}`;});
+    $('#coin-btn').addEventListener('click',()=>{$('#random-result').textContent=Math.random()<.5?'Heads':'Tails';});
+    $('#add-card-btn').addEventListener('click',()=>{setStatus($('#add-card-status'),'');openModal('add-card-modal');});
+    $('#token-btn').addEventListener('click',()=>openModal('token-modal'));
+    $('#add-card-submit').addEventListener('click',addAnyCard); $('#token-submit').addEventListener('click',createToken);
+    $('#tools-btn').addEventListener('click',()=>{$('#table-notes').value=state.notes||'';openModal('tools-modal');});
+    $('#table-notes').addEventListener('input',e=>{state.notes=e.target.value;scheduleSave();});
+    $('#tool-add-card').addEventListener('click',()=>{closeModal('tools-modal');openModal('add-card-modal');});
+    $('#tool-token').addEventListener('click',()=>{closeModal('tools-modal');openModal('token-modal');});
+    $('#tool-search-library').addEventListener('click',()=>{closeModal('tools-modal');openZone('library','Search library');});
+    $('#tool-shuffle').addEventListener('click',()=>{shuffleLibrary(true);closeModal('tools-modal');});
+    $('#tool-reset-trackers').addEventListener('click',()=>{checkpoint();state.life=40;state.poison=0;state.energy=0;state.commanderTax=0;state.turn=1;render();scheduleSave();toast('Trackers reset.');});
+    $('#tool-new-game').addEventListener('click',newGameSameDeck);
+    $('#damage-btn').addEventListener('click',()=>{renderDamage();openModal('damage-modal');});
+    $('#add-damage-source').addEventListener('click',()=>{checkpoint();state.damage.push({name:'Opponent commander',value:0});renderDamage();render();scheduleSave();});
+    $('#damage-list').addEventListener('click',e=>{
+      const delta=e.target.closest('[data-damage-delta]'); const rem=e.target.closest('[data-damage-remove]');
+      if(delta){const i=Number(delta.dataset.index);checkpoint();state.damage[i].value=Math.max(0,(Number(state.damage[i].value)||0)+Number(delta.dataset.damageDelta));renderDamage();render();scheduleSave();}
+      if(rem){const i=Number(rem.dataset.damageRemove);checkpoint();state.damage.splice(i,1);renderDamage();render();scheduleSave();}
+    });
+    $('#damage-list').addEventListener('change',e=>{if(e.target.matches('[data-damage-name]')){const i=Number(e.target.dataset.damageName);checkpoint();state.damage[i].name=e.target.value;render();scheduleSave();}});
+    $('#zone-search').addEventListener('input',renderZoneModal);
+    $('#zone-modal-tools').addEventListener('click',e=>{const tool=e.target.closest('[data-zone-tool]')?.dataset.zoneTool;if(tool==='shuffle'){shuffleLibrary(true);renderZoneModal();}if(tool==='draw'){drawCards(1);renderZoneModal();}});
+    $('#inspector-content').addEventListener('click',e=>{
+      const move=e.target.closest('[data-inspector-move]'); const action=e.target.closest('[data-inspector-action]');
+      if(move&&selectedId){let target=move.dataset.inspectorMove;if(target==='library-top'){moveCard(selectedId,'library',{placement:'top'});}else if(target==='library-bottom'){moveCard(selectedId,'library',{placement:'bottom'});}else moveCard(selectedId,target);closeModal('inspector');if(!$('#zone-modal').hidden)renderZoneModal();}
+      if(action&&selectedId) inspectorAction(action.dataset.inspectorAction);
+    });
+    $$('[data-close-modal]').forEach(b=>b.addEventListener('click',()=>closeModal(b.dataset.closeModal)));
+    $$('.modal-backdrop').forEach(back=>back.addEventListener('mousedown',e=>{if(e.target===back)closeModal(back.id);}));
+    $('#precon-open').addEventListener('click',()=>{openModal('precon-modal');loadPreconIndex();});
+    $('#precon-search').addEventListener('input',renderPreconList);
+    $('#precon-list').addEventListener('click',()=>{});
+    $('#add-card-name').addEventListener('keydown',e=>{if(e.key==='Enter')addAnyCard();});
+    $('#token-name').addEventListener('keydown',e=>{if(e.key==='Enter')createToken();});
+
+    document.addEventListener('keydown',e=>{
+      const tag=e.target.tagName?.toLowerCase(); if(['input','textarea','select'].includes(tag)) return;
+      if(e.key==='Escape'){closeAllModals();}
+      if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();}
+      if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo();}
+      if(e.key.toLowerCase()==='t'&&selectedId)toggleTapped(selectedId);
+    });
+    wireDropZones();
+  }
+
+  function hydrateStartForm() {
+    try {
+      const deck=JSON.parse(localStorage.getItem(DECK_CACHE_KEY)||'null');
+      if(deck){$('#deck-name').value=deck.deckName||'';$('#commander-name').value=deck.commanderName||'';$('#decklist-input').value=deck.decklist||'';}
+    } catch {}
+    updateContinueButton();
+  }
+
+  wireEvents();
+  hydrateStartForm();
+})();
