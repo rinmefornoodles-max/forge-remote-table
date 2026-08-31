@@ -1,0 +1,170 @@
+    }
+
+    for (const row of quantityByName.values()) entries.push(row);
+
+    const commanderName = String(explicitCommander || '').trim() || autoCommander;
+    return { entries, commanderName };
+  }
+
+  function chunk(arr, size) {
+    const out=[];
+    for (let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size));
+    return out;
+  }
+
+  async function fetchScryfallCards(names, statusEl=null) {
+    const unique = [...new Map(names.filter(Boolean).map(n => [n.toLocaleLowerCase(), n])).values()];
+    const results = new Map();
+    let completed = 0;
+    const batches = chunk(unique, 75);
+
+    for (const batch of batches) {
+      if (statusEl) setStatus(statusEl, `Loading card data… ${completed}/${unique.length}`);
+      try {
+        const res = await fetch(SCRYFALL_COLLECTION, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ identifiers: batch.map(name => ({ name })) })
+        });
+        if (!res.ok) throw new Error(`Scryfall collection request failed (${res.status})`);
+        const payload = await res.json();
+        for (const item of payload.data || []) results.set(item.name.toLocaleLowerCase(), item);
+        for (const missing of payload.not_found || []) {
+          const wanted = missing.name;
+          if (!wanted) continue;
+          try {
+            const fuzzy = await fetch(`${SCRYFALL_NAMED}?fuzzy=${encodeURIComponent(wanted)}`);
+            if (fuzzy.ok) {
+              const item = await fuzzy.json();
+              results.set(wanted.toLocaleLowerCase(), item);
+              results.set(item.name.toLocaleLowerCase(), item);
+            }
+          } catch {}
+        }
+      } catch (err) {
+        console.warn(err);
+        // Fallback one-by-one so one collection/CORS failure does not make the deck unusable.
+        for (const wanted of batch) {
+          try {
+            const res = await fetch(`${SCRYFALL_NAMED}?fuzzy=${encodeURIComponent(wanted)}`);
+            if (res.ok) {
+              const item = await res.json();
+              results.set(wanted.toLocaleLowerCase(), item);
+              results.set(item.name.toLocaleLowerCase(), item);
+            }
+          } catch {}
+        }
+      }
+      completed += batch.length;
+    }
+    if (statusEl) setStatus(statusEl, `Loaded ${results.size} unique cards.`, 'success');
+    return results;
+  }
+
+  function imageForScryfall(data, faceIndex=0) {
+    if (!data) return '';
+    if (data.image_uris) return data.image_uris.normal || data.image_uris.large || data.image_uris.small || '';
+    const face = data.card_faces?.[faceIndex] || data.card_faces?.[0];
+    return face?.image_uris?.normal || face?.image_uris?.large || face?.image_uris?.small || '';
+  }
+
+  function cardTemplate(data, fallbackName) {
+    const faces = Array.isArray(data?.card_faces) ? data.card_faces.map(face => ({
+      name: face.name || fallbackName,
+      image: face.image_uris?.normal || face.image_uris?.large || face.image_uris?.small || '',
+      oracleText: face.oracle_text || '',
+      typeLine: face.type_line || '',
+      power: face.power || '',
+      toughness: face.toughness || ''
+    })) : [];
+    return {
+      scryfallId: data?.id || '',
+      oracleId: data?.oracle_id || '',
+      name: data?.name || fallbackName,
+      image: imageForScryfall(data, 0),
+      typeLine: data?.type_line || faces[0]?.typeLine || '',
+      oracleText: data?.oracle_text || faces.map(f=>f.oracleText).filter(Boolean).join('\n//\n'),
+      manaCost: data?.mana_cost || data?.card_faces?.[0]?.mana_cost || '',
+      power: data?.power || faces[0]?.power || '',
+      toughness: data?.toughness || faces[0]?.toughness || '',
+      faces
+    };
+  }
+
+  function makeInstance(template, extra={}) {
+    return Object.assign({
+      id: uid(),
+      scryfallId:'', oracleId:'', name:'Unknown card', image:'', typeLine:'', oracleText:'', manaCost:'', power:'', toughness:'', faces:[],
+      faceIndex:0, tapped:false, faceDown:false, counters:{}, token:false, custom:false, x:null, y:null, rotation:0, note:''
+    }, template || {}, extra);
+  }
+
+  function addInstanceToState(instance, zone='library', placement='bottom') {
+    state.cards[instance.id] = instance;
+    if (!state.zones[zone]) zone = 'library';
+    if (zone === 'library' && placement === 'top') state.zones.library.unshift(instance.id);
+    else state.zones[zone].push(instance.id);
+    return instance.id;
+  }
+
+  async function loadDeckFromText() {
+    const input = $('#decklist-input');
+    const status = $('#setup-status');
+    const deckName = $('#deck-name').value.trim() || 'Remote Commander';
+    const explicitCommander = $('#commander-name').value.trim();
+    const parsed = parseDecklist(input.value, explicitCommander);
+    const count = parsed.entries.reduce((sum,e)=>sum+e.quantity,0);
+    if (!parsed.entries.length) return setStatus(status, 'I could not find any card lines. Paste entries like “1 Sol Ring”.', 'error');
+    if (count > 400) return setStatus(status, `That list contains ${count} cards. For safety, keep one table under 400 objects.`, 'error');
+
+    $('#load-deck').disabled = true;
+    setStatus(status, `Reading ${count} cards…`);
+    try {
+      const dataMap = await fetchScryfallCards(parsed.entries.map(e=>e.name), status);
+      const next = freshState();
+      next.started = true;
+      next.deckName = deckName;
+      next.commanderName = parsed.commanderName;
+
+      for (const entry of parsed.entries) {
+        const data = dataMap.get(entry.name.toLocaleLowerCase());
+        const template = cardTemplate(data, entry.name);
+        for (let i=0;i<entry.quantity;i++) addInstanceTo(next, makeInstance(template), 'library');
+      }
+
+      state = next;
+      history = [];
+      future = [];
+      if (parsed.commanderName) moveCommanderOutOfLibrary(parsed.commanderName, false);
+      shuffleLibrary(false);
+      drawCards(7, false);
+      logEvent('Loaded deck and drew an opening hand of 7.');
+      try { localStorage.setItem(DECK_CACHE_KEY, JSON.stringify({deckName, commanderName: parsed.commanderName, decklist: input.value})); } catch {}
+      showApp();
+      render();
+      scheduleSave();
+      setStatus(status, 'Deck loaded.', 'success');
+    } catch (err) {
+      console.error(err);
+      setStatus(status, `Could not load the deck: ${err.message || err}`, 'error');
+    } finally {
+      $('#load-deck').disabled = false;
+    }
+  }
+
+  function addInstanceTo(targetState, instance, zone='library') {
+    targetState.cards[instance.id] = instance;
+    targetState.zones[zone].push(instance.id);
+  }
+
+  function moveCommanderOutOfLibrary(name, doCheckpoint=true) {
+    const wanted = String(name).toLocaleLowerCase();
+    const id = state.zones.library.find(id => card(id)?.name.toLocaleLowerCase() === wanted || card(id)?.name.toLocaleLowerCase().startsWith(`${wanted} //`));
+    if (!id) return false;
+    if (doCheckpoint) checkpoint();
+    removeFromZones(id);
+    state.zones.command.push(id);
+    state.commanderName = card(id)?.name || name;
+    return true;
+  }
+
