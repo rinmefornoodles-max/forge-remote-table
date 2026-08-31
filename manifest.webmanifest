@@ -1,0 +1,9 @@
+{
+  "name": "Forge Remote Table",
+  "short_name": "Remote Table",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#080c0c",
+  "theme_color": "#0b1110",
+  "description": "A freeform single-player Commander tabletop for screen-shared long-distance Magic games."
+}
