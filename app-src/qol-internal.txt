@@ -1,0 +1,392 @@
+
+
+  // --- Quality-of-life expansion: Commander mulligans, in-app dialogs,
+  //     easier exile controls, flexible card markers, and smoother dragging. ---
+  let qolMulliganSelected = [];
+  let qolSuppressCardClicksUntil = 0;
+
+  function qolEnsureState() {
+    if (!Number.isFinite(Number(state.mulligansTaken))) state.mulligansTaken = 0;
+    if (typeof state.mulliganFreeFirst !== 'boolean') state.mulliganFreeFirst = true;
+    if (typeof state.openingHandKept !== 'boolean') state.openingHandKept = false;
+  }
+
+  function qolInstallUi() {
+    if (!$('#qol-style')) {
+      const style = document.createElement('style');
+      style.id = 'qol-style';
+      style.textContent = `
+        .qol-dialog-body{display:grid;gap:14px}.qol-dialog-copy{color:var(--muted);line-height:1.55;margin:0}
+        .qol-dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:18px}
+        .qol-rule-box{border:1px solid var(--line);background:#0b1110;border-radius:12px;padding:13px;color:#c8d2cd;line-height:1.5;font-size:13px}
+        .qol-rule-box strong{color:var(--gold-bright)}
+        .qol-check{display:flex;align-items:flex-start;gap:9px;font-weight:650;color:#d4ddd8}.qol-check input{width:auto;margin-top:3px}
+        .qol-hand-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:9px;max-height:48vh;overflow:auto;padding:2px}
+        .qol-hand-card{position:relative;border:1px solid var(--line);background:#101816;border-radius:11px;padding:7px;cursor:pointer;text-align:left;color:var(--text)}
+        .qol-hand-card:hover{border-color:var(--line-strong)}.qol-hand-card.selected{border-color:var(--gold-bright);box-shadow:0 0 0 2px rgba(241,199,121,.18)}
+        .qol-hand-card img{width:100%;aspect-ratio:488/680;object-fit:cover;border-radius:7px;display:block;margin-bottom:6px}.qol-hand-card strong{display:block;font-size:11px;line-height:1.25}
+        .qol-select-badge{position:absolute;top:11px;right:11px;background:#151f1d;border:1px solid var(--gold);color:var(--gold-bright);border-radius:999px;padding:3px 7px;font-size:10px;font-weight:900}
+        .qol-inline-actions{display:flex;gap:6px;margin-top:7px}.qol-inline-actions button{flex:1;border:1px solid var(--line);background:#17211e;border-radius:7px;padding:7px 5px;color:#c5d0cb;font-size:10px;cursor:pointer}
+        .qol-inline-actions button:hover{border-color:var(--gold)}
+        .qol-marker-badge{position:absolute;left:5px;bottom:5px;z-index:8;background:rgba(9,14,13,.94);border:1px solid var(--gold);color:var(--gold-bright);border-radius:999px;padding:3px 6px;font-size:10px;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none}
+        .qol-stack-badge{position:absolute;right:5px;bottom:5px;z-index:9;background:rgba(9,14,13,.96);border:1px solid #7ca78b;color:#dff5e6;border-radius:999px;padding:3px 7px;font-size:11px;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none}
+        .qol-mulligan-status{display:flex;flex-wrap:wrap;gap:7px}.qol-mulligan-status span{border:1px solid var(--line);background:#101816;border-radius:999px;padding:6px 9px;font-size:11px;color:#c4d0ca}.qol-mulligan-status strong{color:var(--gold-bright)}
+        .qol-danger{border-color:#7d3e3e!important;background:linear-gradient(#6d3535,#4d2525)!important}
+        .qol-drag-mode .drop-zone{box-shadow:inset 0 0 0 2px rgba(208,164,95,.22)}
+        .qol-drag-mode .drop-zone.drag-over{box-shadow:inset 0 0 0 3px rgba(241,199,121,.75),0 0 22px rgba(208,164,95,.18)}
+        .qol-dragging-card{opacity:.72!important;filter:brightness(1.08);cursor:grabbing!important}
+        .qol-drag-ghost{position:fixed;z-index:9999;width:94px;height:131px;pointer-events:none;opacity:.78;transform:translate(-50%,-50%);border-radius:8px;overflow:hidden;box-shadow:0 14px 32px rgba(0,0,0,.55),0 0 0 2px rgba(241,199,121,.55)}
+        .qol-drag-ghost img{width:100%;height:100%;object-fit:cover}.qol-drag-ghost .card-fallback{width:100%;height:100%;font-size:10px}
+        .command-preview .remote-card,#command-preview .remote-card{pointer-events:auto!important;cursor:grab!important}
+        @media(max-width:700px){.qol-hand-list{grid-template-columns:repeat(2,minmax(0,1fr))}.qol-dialog-actions{justify-content:stretch}.qol-dialog-actions .btn{flex:1}}
+      `;
+      document.head.appendChild(style);
+    }
+
+    if (!$('#qol-dialog')) {
+      const dialog = document.createElement('div');
+      dialog.id = 'qol-dialog';
+      dialog.className = 'modal-backdrop';
+      dialog.hidden = true;
+      dialog.innerHTML = `<section class="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="qol-dialog-title"><button class="modal-close" data-close-modal="qol-dialog" type="button" aria-label="Close">×</button><div class="eyebrow" id="qol-dialog-eyebrow">TABLE ACTION</div><h2 id="qol-dialog-title">Action</h2><div id="qol-dialog-body" class="qol-dialog-body"></div><div id="qol-dialog-actions" class="qol-dialog-actions"></div></section>`;
+      document.body.appendChild(dialog);
+    }
+
+    if (!$('#qol-mulligan-modal')) {
+      const mulligan = document.createElement('div');
+      mulligan.id = 'qol-mulligan-modal';
+      mulligan.className = 'modal-backdrop';
+      mulligan.hidden = true;
+      mulligan.innerHTML = `<section class="modal tools-modal" role="dialog" aria-modal="true" aria-labelledby="qol-mulligan-title"><button class="modal-close" data-close-modal="qol-mulligan-modal" type="button" aria-label="Close">×</button><div class="eyebrow">OPENING HAND</div><h2 id="qol-mulligan-title">Commander mulligan</h2><div id="qol-mulligan-body"></div></section>`;
+      document.body.appendChild(mulligan);
+    }
+
+    const gy = $('#graveyard-zone');
+    if (gy && !$('#graveyard-exile-qol')) {
+      const actions = document.createElement('div');
+      actions.className = 'qol-inline-actions';
+      actions.innerHTML = '<button id="graveyard-exile-qol" type="button">Exile…</button><button id="graveyard-all-qol" type="button">Exile all</button>';
+      gy.appendChild(actions);
+    }
+
+    const mulliganBtn = $('#mulligan-btn');
+    if (mulliganBtn) mulliganBtn.textContent = 'Mulligan';
+
+    const toolsGrid = $('#tools-modal .tool-grid');
+    if (toolsGrid && !$('#tool-mulligan-rules')) {
+      const b = document.createElement('button');
+      b.id = 'tool-mulligan-rules';
+      b.className = 'tool-tile';
+      b.type = 'button';
+      b.innerHTML = '<strong>Mulligan & opening-hand rules</strong><span>Run a London mulligan and choose whether the multiplayer free mulligan applies.</span>';
+      toolsGrid.insertBefore(b, toolsGrid.firstChild);
+    }
+  }
+
+  function qolCloseDialog() { $('#qol-dialog').hidden = true; }
+
+  function qolOpenDialog({eyebrow='TABLE ACTION', title='Action', html='', actions=[]}) {
+    qolInstallUi();
+    $('#qol-dialog-eyebrow').textContent = eyebrow;
+    $('#qol-dialog-title').textContent = title;
+    $('#qol-dialog-body').innerHTML = html;
+    const footer = $('#qol-dialog-actions');
+    footer.innerHTML = '';
+    for (const action of actions) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = action.className || 'btn';
+      b.textContent = action.label;
+      b.addEventListener('click', () => action.onClick?.());
+      footer.appendChild(b);
+    }
+    $('#qol-dialog').hidden = false;
+    requestAnimationFrame(() => $('#qol-dialog-body input, #qol-dialog-body textarea, #qol-dialog-actions button')?.focus());
+  }
+
+  function qolNumberDialog({title, copy='', label='Number', value=1, min=0, max=100, allowNegative=false, confirmLabel='Apply', onConfirm}) {
+    const minAttr = allowNegative ? '' : `min="${min}"`;
+    qolOpenDialog({
+      title,
+      html:`${copy?`<p class="qol-dialog-copy">${escapeHtml(copy)}</p>`:''}<label>${escapeHtml(label)}<input id="qol-number-input" type="number" ${minAttr} max="${max}" step="1" value="${escapeHtml(value)}"></label>`,
+      actions:[
+        {label:'Cancel',className:'btn ghost',onClick:qolCloseDialog},
+        {label:confirmLabel,className:'btn primary',onClick:()=>{const raw=Number($('#qol-number-input').value);if(!Number.isFinite(raw))return;const n=allowNegative?Math.trunc(raw):clamp(Math.trunc(raw),min,max);qolCloseDialog();onConfirm?.(n);}}
+      ]
+    });
+    $('#qol-number-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('#qol-dialog-actions .primary')?.click(); });
+  }
+
+  function qolConfirm({title, copy='', confirmLabel='Confirm', danger=false, onConfirm}) {
+    qolOpenDialog({
+      title,
+      html:`<p class="qol-dialog-copy">${escapeHtml(copy)}</p>`,
+      actions:[
+        {label:'Cancel',className:'btn ghost',onClick:qolCloseDialog},
+        {label:confirmLabel,className:`btn ${danger?'qol-danger':'primary'}`,onClick:()=>{qolCloseDialog();onConfirm?.();}}
+      ]
+    });
+  }
+
+  function qolExileFromGraveyard(amount='all') {
+    const total = state.zones.graveyard.length;
+    if (!total) return toast('Graveyard is empty.');
+    const n = amount === 'all' ? total : clamp(Number(amount)||0, 0, total);
+    if (!n) return;
+    checkpoint();
+    const ids = state.zones.graveyard.splice(Math.max(0,total-n), n);
+    state.zones.exile.push(...ids);
+    logEvent(n === total ? 'Exiled the entire graveyard.' : `Exiled ${n} card${n===1?'':'s'} from the graveyard.`);
+    render(); scheduleSave();
+    toast(n === total ? 'Graveyard exiled.' : `Exiled ${n} from graveyard.`);
+  }
+
+  function qolOpenGraveyardExile() {
+    const total = state.zones.graveyard.length;
+    if (!total) return toast('Graveyard is empty.');
+    qolOpenDialog({
+      eyebrow:'GRAVEYARD', title:'Exile from graveyard',
+      html:`<p class="qol-dialog-copy">There are <strong>${total}</strong> cards in your graveyard. Exile a number from the top of the graveyard, or exile everything.</p><label>Number to exile<input id="qol-gy-number" type="number" min="1" max="${total}" step="1" value="1"></label>`,
+      actions:[
+        {label:'Cancel',className:'btn ghost',onClick:qolCloseDialog},
+        {label:'Exile all',className:'btn qol-danger',onClick:()=>{qolCloseDialog();qolExileFromGraveyard('all');}},
+        {label:'Exile number',className:'btn primary',onClick:()=>{const n=clamp(Number($('#qol-gy-number').value)||1,1,total);qolCloseDialog();qolExileFromGraveyard(n);}}
+      ]
+    });
+  }
+
+  function qolRequiredBottomCount() {
+    qolEnsureState();
+    return Math.max(0, Number(state.mulligansTaken)||0 - (state.mulliganFreeFirst ? 1 : 0));
+  }
+
+  function qolShuffleAndDrawSeven() {
+    for (const id of [...state.zones.hand]) { removeFromZones(id); state.zones.library.push(id); }
+    const a = state.zones.library;
+    for (let i=a.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+    while (state.zones.hand.length < 7 && state.zones.library.length) state.zones.hand.push(state.zones.library.shift());
+  }
+
+  function qolTakeMulligan() {
+    qolEnsureState();
+    checkpoint();
+    qolShuffleAndDrawSeven();
+    state.mulligansTaken += 1;
+    state.openingHandKept = false;
+    qolMulliganSelected = [];
+    logEvent(`Took mulligan ${state.mulligansTaken}${state.mulliganFreeFirst&&state.mulligansTaken===1?' (free multiplayer mulligan)':''}.`);
+    render(); scheduleSave(); qolRenderMulligan();
+  }
+
+  function qolFinishKeep() {
+    qolEnsureState();
+    const required = qolRequiredBottomCount();
+    if (!required) {
+      checkpoint(); state.openingHandKept = true; logEvent('Kept opening hand.'); scheduleSave(); $('#qol-mulligan-modal').hidden = true; toast('Opening hand kept.'); return;
+    }
+    qolMulliganSelected = [];
+    qolRenderMulligan('bottom');
+  }
+
+  function qolBottomSelected() {
+    const required = qolRequiredBottomCount();
+    if (qolMulliganSelected.length !== required) return;
+    checkpoint();
+    for (const id of qolMulliganSelected) {
+      const i = state.zones.hand.indexOf(id);
+      if (i >= 0) state.zones.hand.splice(i,1);
+      state.zones.library.push(id);
+    }
+    state.openingHandKept = true;
+    logEvent(`Kept opening hand and put ${required} card${required===1?'':'s'} on the bottom.`);
+    qolMulliganSelected = [];
+    render(); scheduleSave(); $('#qol-mulligan-modal').hidden = true; toast('Opening hand kept.');
+  }
+
+  function qolRenderMulligan(mode='main') {
+    qolInstallUi(); qolEnsureState();
+    const body = $('#qol-mulligan-body');
+    const required = qolRequiredBottomCount();
+    if (mode === 'bottom') {
+      const cards = state.zones.hand.map(id => {
+        const c = card(id); const selectedIndex = qolMulliganSelected.indexOf(id); const selected = selectedIndex >= 0;
+        const image = c ? currentCardImage(c) : '';
+        return `<button class="qol-hand-card${selected?' selected':''}" type="button" data-qol-bottom-id="${escapeHtml(id)}">${image?`<img src="${escapeHtml(image)}" alt="${escapeHtml(c.name)}">`:''}<strong>${escapeHtml(c?.name||'Card')}</strong>${selected?`<span class="qol-select-badge">${selectedIndex+1}</span>`:''}</button>`;
+      }).join('');
+      body.innerHTML = `<div class="qol-rule-box"><strong>Keep this hand:</strong> choose exactly ${required} card${required===1?'':'s'} to put on the bottom of your library. Under the London mulligan, you choose these only after deciding to keep.</div><div class="qol-mulligan-status"><span>Need to bottom <strong>${required}</strong></span><span>Selected <strong id="qol-selected-count">${qolMulliganSelected.length}</strong></span></div><div class="qol-hand-list">${cards}</div><div class="qol-dialog-actions"><button id="qol-bottom-back" class="btn ghost" type="button">Back</button><button id="qol-bottom-confirm" class="btn primary" type="button" ${qolMulliganSelected.length===required?'':'disabled'}>Put selected on bottom</button></div>`;
+      $$('[data-qol-bottom-id]', body).forEach(b => b.addEventListener('click', () => {
+        const id = b.dataset.qolBottomId; const i=qolMulliganSelected.indexOf(id);
+        if(i>=0) qolMulliganSelected.splice(i,1); else if(qolMulliganSelected.length<required) qolMulliganSelected.push(id);
+        qolRenderMulligan('bottom');
+      }));
+      $('#qol-bottom-back').addEventListener('click',()=>qolRenderMulligan());
+      $('#qol-bottom-confirm').addEventListener('click',qolBottomSelected);
+    } else {
+      body.innerHTML = `<div class="qol-rule-box"><strong>London mulligan:</strong> shuffle your hand into your library and draw 7 again. When you keep, put a number of cards from your hand on the bottom equal to the mulligans that count. <br><br><strong>Commander note:</strong> in a multiplayer game, the first mulligan is free. In a normal two-player game it is not; you can switch that option below if this remote game is 1v1.</div><label class="qol-check"><input id="qol-free-mulligan" type="checkbox" ${state.mulliganFreeFirst?'checked':''}><span>Use multiplayer Commander free first mulligan</span></label><div class="qol-mulligan-status"><span>Mulligans taken <strong>${state.mulligansTaken}</strong></span><span>If you keep now, bottom <strong>${required}</strong></span><span>Hand <strong>${state.zones.hand.length}</strong></span></div>${state.openingHandKept?'<p class="qol-dialog-copy">This opening hand was already marked kept. The helper stays available because the tabletop does not enforce game timing.</p>':''}<div class="qol-dialog-actions"><button id="qol-reset-mulligan" class="btn ghost" type="button">Reset helper</button><button id="qol-take-mulligan" class="btn" type="button">Take mulligan</button><button id="qol-keep-hand" class="btn primary" type="button">Keep hand</button></div>`;
+      $('#qol-free-mulligan').addEventListener('change', e => { checkpoint(); state.mulliganFreeFirst=e.target.checked; state.openingHandKept=false; scheduleSave(); qolRenderMulligan(); });
+      $('#qol-reset-mulligan').addEventListener('click',()=>{checkpoint();state.mulligansTaken=0;state.openingHandKept=false;qolMulliganSelected=[];scheduleSave();qolRenderMulligan();});
+      $('#qol-take-mulligan').addEventListener('click',qolTakeMulligan);
+      $('#qol-keep-hand').addEventListener('click',qolFinishKeep);
+    }
+    $('#qol-mulligan-modal').hidden = false;
+  }
+
+  function qolOpenCounterDialog(id) {
+    const c=card(id); if(!c)return;
+    qolOpenDialog({eyebrow:'CARD MARKER',title:'Set counters',html:`<p class="qol-dialog-copy">Use this for +1/+1 counters, charge counters, lore counters, shield counters, or any other named counter.</p><label>Counter name<input id="qol-counter-name" type="text" value="+1/+1"></label><label>How many?<input id="qol-counter-count" type="number" min="0" max="999" step="1" value="${Number(c.counters?.['+1/+1'])||1}"></label>`,actions:[{label:'Cancel',className:'btn ghost',onClick:qolCloseDialog},{label:'Set counters',className:'btn primary',onClick:()=>{const name=$('#qol-counter-name').value.trim();const n=clamp(Number($('#qol-counter-count').value)||0,0,999);if(!name)return;checkpoint();c.counters=c.counters||{};if(n)c.counters[name]=n;else delete c.counters[name];qolCloseDialog();render();scheduleSave();openInspector(id);}}]});
+  }
+
+  function qolOpenPtDialog(id) {
+    const c=card(id); if(!c)return; const p=Number(c.ptBoost?.power)||0, t=Number(c.ptBoost?.toughness)||0;
+    qolOpenDialog({eyebrow:'CARD MARKER',title:'Power / toughness modifier',html:`<p class="qol-dialog-copy">Visual shorthand for effects such as +1/+1, +9/+9, -2/-2, or unequal changes. This does not change rules text or enforce layers.</p><div class="two-col"><label>Power change<input id="qol-power-change" type="number" min="-999" max="999" step="1" value="${p}"></label><label>Toughness change<input id="qol-toughness-change" type="number" min="-999" max="999" step="1" value="${t}"></label></div>`,actions:[{label:'Clear',className:'btn ghost',onClick:()=>{checkpoint();delete c.ptBoost;qolCloseDialog();render();scheduleSave();openInspector(id);}},{label:'Cancel',className:'btn ghost',onClick:qolCloseDialog},{label:'Apply',className:'btn primary',onClick:()=>{const power=clamp(Math.trunc(Number($('#qol-power-change').value)||0),-999,999);const toughness=clamp(Math.trunc(Number($('#qol-toughness-change').value)||0),-999,999);checkpoint();if(power||toughness)c.ptBoost={power,toughness};else delete c.ptBoost;qolCloseDialog();render();scheduleSave();openInspector(id);}}]});
+  }
+
+  function qolOpenStackDialog(id) {
+    const c=card(id); if(!c)return;
+    qolNumberDialog({title:'Duplicate / stack count',copy:'Use one card as a visual stack for identical tokens or duplicate objects. This is only a tabletop shortcut; it does not merge the objects for Magic rules.',label:'How many does this card represent?',value:Math.max(1,Number(c.stackCount)||1),min:1,max:999,confirmLabel:'Set stack',onConfirm:n=>{checkpoint();if(n>1)c.stackCount=n;else delete c.stackCount;render();scheduleSave();openInspector(id);}});
+  }
+
+  function qolOpenNoteDialog(id) {
+    const c=card(id); if(!c)return;
+    qolOpenDialog({eyebrow:'CARD NOTE',title:`Note — ${c.name}`,html:`<label>Note<textarea id="qol-card-note" rows="5" placeholder="Remember an effect, chosen name, copied value, etc.">${escapeHtml(c.note||'')}</textarea></label>`,actions:[{label:'Cancel',className:'btn ghost',onClick:qolCloseDialog},{label:'Save note',className:'btn primary',onClick:()=>{checkpoint();c.note=$('#qol-card-note').value;qolCloseDialog();render();scheduleSave();openInspector(id);}}]});
+  }
+
+  function qolAttachMarkerBadges(el,c) {
+    if (!el || !c) return;
+    const p=Number(c.ptBoost?.power)||0, t=Number(c.ptBoost?.toughness)||0;
+    if (p || t) {
+      const badge=document.createElement('span'); badge.className='qol-marker-badge';
+      const f=n=>n>0?`+${n}`:String(n); badge.textContent=`${f(p)}/${f(t)}`; el.appendChild(badge);
+    }
+    if (Number(c.stackCount)>1) { const badge=document.createElement('span');badge.className='qol-stack-badge';badge.textContent=`×${Math.trunc(Number(c.stackCount))}`;el.appendChild(badge); }
+  }
+
+  function qolDropTargetAt(clientX,clientY,dragEl) {
+    const old=dragEl?.style.pointerEvents;
+    if(dragEl) dragEl.style.pointerEvents='none';
+    const found=document.elementFromPoint(clientX,clientY)?.closest?.('.drop-zone')||null;
+    if(dragEl) dragEl.style.pointerEvents=old||'';
+    return found;
+  }
+
+  function qolEnablePointerDrag(el,id,originZone) {
+    if (!el || !['battlefield','hand','command'].includes(originZone)) return;
+    el.draggable=false;
+    el.style.touchAction='none';
+    let pointerId=null,startX=0,startY=0,baseX=0,baseY=0,dragging=false,ghost=null,lastTarget=null;
+    const cleanup=()=>{draggedId=null;document.body.classList.remove('qol-drag-mode');el.classList.remove('qol-dragging-card');lastTarget?.classList.remove('drag-over');lastTarget=null;ghost?.remove();ghost=null;};
+    const onMove=e=>{
+      if(pointerId!==e.pointerId)return;
+      const dx=e.clientX-startX,dy=e.clientY-startY;
+      if(!dragging&&Math.hypot(dx,dy)<7)return;
+      if(!dragging){dragging=true;checkpoint();draggedId=id;document.body.classList.add('qol-drag-mode');el.classList.add('qol-dragging-card');if(originZone!=='battlefield'){ghost=el.cloneNode(true);ghost.className='qol-drag-ghost';ghost.removeAttribute('style');document.body.appendChild(ghost);}}
+      e.preventDefault();
+      if(originZone==='battlefield'){
+        const c=card(id);if(c){c.x=Math.max(0,baseX+dx);c.y=Math.max(0,baseY+dy);el.style.left=`${c.x}px`;el.style.top=`${c.y}px`;}
+      }else if(ghost){ghost.style.left=`${e.clientX}px`;ghost.style.top=`${e.clientY}px`;}
+      const target=qolDropTargetAt(e.clientX,e.clientY,el);if(lastTarget!==target){lastTarget?.classList.remove('drag-over');target?.classList.add('drag-over');lastTarget=target;}
+    };
+    const onUp=e=>{
+      if(pointerId!==e.pointerId)return;
+      try{el.releasePointerCapture(pointerId);}catch{}
+      if(!dragging){pointerId=null;return;}
+      qolSuppressCardClicksUntil=Date.now()+420;
+      const target=qolDropTargetAt(e.clientX,e.clientY,el);const targetZone=target?.dataset.dropZone;const origin=zoneOf(id);
+      cleanup();pointerId=null;
+      if(targetZone){
+        if(targetZone==='battlefield'){
+          const bf=$('#battlefield'),rect=bf.getBoundingClientRect();const x=Math.max(0,e.clientX-rect.left-61+bf.scrollLeft),y=Math.max(0,e.clientY-rect.top-85+bf.scrollTop);
+          if(origin==='battlefield'){const c=card(id);if(c){c.x=x;c.y=y;logEvent(`${c.name}: repositioned on battlefield.`);render();scheduleSave();}}
+          else moveCard(id,'battlefield',{x,y,checkpoint:false});
+        }else if(targetZone==='library') moveCard(id,'library',{placement:'top',checkpoint:false});
+        else moveCard(id,targetZone,{checkpoint:false});
+      }else if(originZone==='battlefield'){render();scheduleSave();}
+      else { history.pop(); render(); }
+    };
+    el.addEventListener('pointerdown',e=>{if(e.button!==0||pointerId!==null)return;pointerId=e.pointerId;startX=e.clientX;startY=e.clientY;const c=card(id);baseX=Number(c?.x)||0;baseY=Number(c?.y)||0;try{el.setPointerCapture(pointerId);}catch{}});
+    el.addEventListener('pointermove',onMove);
+    el.addEventListener('pointerup',onUp);
+    el.addEventListener('pointercancel',onUp);
+    el.addEventListener('click',e=>{if(Date.now()<qolSuppressCardClicksUntil){e.preventDefault();e.stopImmediatePropagation();}},true);
+    el.addEventListener('dblclick',e=>{e.preventDefault();e.stopImmediatePropagation();if(Date.now()>=qolSuppressCardClicksUntil&&zoneOf(id)==='battlefield')toggleTapped(id);},true);
+  }
+
+  const qolBaseMakeCardElement = makeCardElement;
+  makeCardElement = function(id,zone,opts={}) {
+    const el=qolBaseMakeCardElement(id,zone,opts); const c=card(id);
+    if(c)qolAttachMarkerBadges(el,c);
+    if(!opts.preview)qolEnablePointerDrag(el,id,zone);
+    return el;
+  };
+
+  const qolBaseOpenInspector = openInspector;
+  openInspector = function(id) {
+    qolBaseOpenInspector(id);
+    const c=card(id); if(!c)return;
+    const grids=$$('#inspector-content .action-grid'); const grid=grids[grids.length-1];
+    if(grid&&!grid.querySelector('[data-inspector-action="ptmarker"]')){
+      const pt=document.createElement('button');pt.dataset.inspectorAction='ptmarker';pt.textContent='P/T modifier';grid.appendChild(pt);
+      const stack=document.createElement('button');stack.dataset.inspectorAction='stack';stack.textContent=`Stack count${Number(c.stackCount)>1?` ×${Number(c.stackCount)}`:''}`;grid.appendChild(stack);
+      const counter=grid.querySelector('[data-inspector-action="counter"]');if(counter)counter.textContent='Set counters…';
+    }
+  };
+
+  const qolBaseInspectorAction = inspectorAction;
+  inspectorAction = function(action) {
+    const id=selectedId,c=card(id);if(!c)return;
+    if(action==='counter')return qolOpenCounterDialog(id);
+    if(action==='ptmarker')return qolOpenPtDialog(id);
+    if(action==='stack')return qolOpenStackDialog(id);
+    if(action==='note')return qolOpenNoteDialog(id);
+    if(action==='delete')return qolConfirm({title:`Delete ${c.name}?`,copy:'Remove this object from the table. You can still Undo afterward.',confirmLabel:'Delete object',danger:true,onConfirm:()=>{checkpoint();removeFromZones(id);delete state.cards[id];selectedId=null;closeModal('inspector');render();scheduleSave();}});
+    return qolBaseInspectorAction(action);
+  };
+
+  const qolBaseRenderZoneModal = renderZoneModal;
+  renderZoneModal = function() {
+    qolBaseRenderZoneModal();
+    const tools=$('#zone-modal-tools'); if(!tools)return;
+    if(zoneModalZone==='library'){
+      const b=document.createElement('button');b.className='btn tiny ghost';b.type='button';b.textContent='Exile top N';b.addEventListener('click',()=>qolNumberDialog({title:'Exile from library',copy:'Choose how many cards to exile from the top of your library.',label:'Cards to exile',value:1,min:1,max:Math.max(1,state.zones.library.length),confirmLabel:'Exile',onConfirm:n=>{moveTopN('exile',n);renderZoneModal();}}));tools.appendChild(b);
+    }
+    if(zoneModalZone==='graveyard'){
+      const b=document.createElement('button');b.className='btn tiny ghost';b.type='button';b.textContent='Exile N';b.addEventListener('click',qolOpenGraveyardExile);tools.appendChild(b);
+      const all=document.createElement('button');all.className='btn tiny ghost';all.type='button';all.textContent='Exile all';all.addEventListener('click',()=>qolExileFromGraveyard('all'));tools.appendChild(all);
+    }
+  };
+
+  setLife = function() { qolNumberDialog({title:'Set life total',copy:'Enter your current life total.',label:'Life',value:state.life,min:-999,max:999,allowNegative:true,confirmLabel:'Set life',onConfirm:n=>{checkpoint();state.life=n;render();scheduleSave();}}); };
+  redrawHand = function() { qolRenderMulligan(); };
+
+  newGameSameDeck = function() {
+    qolConfirm({title:'Start a new game?',copy:'Reset this deck for a fresh game. Tokens, custom objects, and outside-deck cards will be removed. Your current state remains available through Undo.',confirmLabel:'Start new game',danger:true,onConfirm:()=>{
+      checkpoint(); const commanderIds=[],all=[];
+      for(const [id,c] of Object.entries(state.cards)){
+        if(c.token||c.custom||c.outsideDeck){delete state.cards[id];continue;}
+        c.tapped=false;c.faceDown=false;c.counters={};c.x=null;c.y=null;c.note='';c.faceIndex=0;delete c.ptBoost;delete c.stackCount;
+        if(state.commanderName&&c.name.toLocaleLowerCase()===state.commanderName.toLocaleLowerCase()&&!commanderIds.length)commanderIds.push(id);else all.push(id);
+      }
+      state.zones={library:all,hand:[],battlefield:[],graveyard:[],exile:[],command:commanderIds};state.life=40;state.poison=0;state.energy=0;state.commanderTax=0;state.turn=1;state.damage=state.damage.map(d=>({...d,value:0}));state.mulligansTaken=0;state.openingHandKept=false;
+      const a=state.zones.library;for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}for(let i=0;i<7&&a.length;i++)state.zones.hand.push(a.shift());
+      logEvent('Started a new game with the same deck.');closeModal('tools-modal');render();scheduleSave();toast('New game ready — use Mulligan for opening-hand rules.');
+    }});
+  };
+
+  function qolInterceptPromptButton(selector, handler) {
+    const el=$(selector);if(!el)return;
+    el.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();handler();},true);
+  }
+
+  function qolInstallEvents() {
+    $('#graveyard-exile-qol')?.addEventListener('click',qolOpenGraveyardExile);
+    $('#graveyard-all-qol')?.addEventListener('click',()=>qolExileFromGraveyard('all'));
+    $('#tool-mulligan-rules')?.addEventListener('click',()=>{closeModal('tools-modal');qolRenderMulligan();});
+    qolInterceptPromptButton('#draw-many',()=>qolNumberDialog({title:'Draw cards',copy:'Choose how many cards to draw.',label:'Cards to draw',value:2,min:1,max:100,confirmLabel:'Draw',onConfirm:n=>drawCards(n)}));
+    qolInterceptPromptButton('#mill-btn',()=>qolNumberDialog({title:'Mill from library',copy:'Move this many cards from the top of your library to your graveyard.',label:'Cards to mill',value:1,min:1,max:100,confirmLabel:'Mill',onConfirm:n=>moveTopN('graveyard',n)}));
+    qolInterceptPromptButton('#exile-top-btn',()=>qolNumberDialog({title:'Exile from library',copy:'Library exile is number-only: choose how many cards to exile from the top.',label:'Cards to exile',value:1,min:1,max:100,confirmLabel:'Exile',onConfirm:n=>moveTopN('exile',n)}));
+    qolInterceptPromptButton('#peek-btn',()=>qolNumberDialog({title:'Look at top cards',copy:'Choose how many cards from the top of your library to view.',label:'Cards to look at',value:3,min:1,max:30,confirmLabel:'Look',onConfirm:n=>openZone('library',`Top ${n} cards`,n)}));
+    qolInterceptPromptButton('#roll-btn',()=>qolNumberDialog({title:'Roll a die',copy:'Choose the number of sides.',label:'Sides',value:20,min:2,max:1000,confirmLabel:'Roll',onConfirm:sides=>{$('#random-result').textContent=`d${sides}: ${1+Math.floor(Math.random()*sides)}`;}}));
+  }
+
+  const qolBaseWireEvents = wireEvents;
+  wireEvents = function() { qolInstallUi(); qolBaseWireEvents(); qolInstallEvents(); };
