@@ -1,0 +1,14 @@
+
+
+  // QoL follow-up fixes.
+  qolRequiredBottomCount = function() {
+    qolEnsureState();
+    const taken = Number(state.mulligansTaken) || 0;
+    return Math.max(0, taken - (state.mulliganFreeFirst ? 1 : 0));
+  };
+
+  const qolBaseExileFromGraveyard = qolExileFromGraveyard;
+  qolExileFromGraveyard = function(amount='all') {
+    qolBaseExileFromGraveyard(amount);
+    if (!$('#zone-modal').hidden && zoneModalZone === 'graveyard') renderZoneModal();
+  };
