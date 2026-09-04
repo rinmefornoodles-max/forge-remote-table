@@ -64,3 +64,378 @@
     `;
     document.head.appendChild(style);
   })();
+
+  // Directional duplicate stacking v2.
+  // The approach direction is remembered: enter a matching card from above to
+  // place the dragged card above it, or from below to place it underneath.
+  (() => {
+    if (!document.getElementById('forge-directional-stack-v2-style')) {
+      const style = document.createElement('style');
+      style.id = 'forge-directional-stack-v2-style';
+      style.textContent = `
+        .forge-stack-approach-hint{
+          position:absolute;left:5px;right:5px;z-index:220;pointer-events:none;
+          display:grid;place-items:center;height:44%;border:2px solid #f1c779;border-radius:9px;
+          background:rgba(16,31,25,.86);color:#fff4d7;font-size:11px;font-weight:950;
+          letter-spacing:.08em;text-transform:uppercase;text-shadow:0 2px 4px #000;
+          box-shadow:0 0 24px rgba(241,199,121,.35) inset,0 5px 16px rgba(0,0,0,.45)
+        }
+        .forge-stack-approach-hint.above{top:5px}
+        .forge-stack-approach-hint.below{bottom:5px}
+      `;
+      document.head.appendChild(style);
+    }
+
+    const normName = c => String(c?.name || '').trim().toLocaleLowerCase();
+
+    function anchorIdFor(id) {
+      const c = card(id);
+      return c?.autoStackAnchor && card(c.autoStackAnchor) ? c.autoStackAnchor : id;
+    }
+
+    function membersOf(anchorId) {
+      if (!anchorId) return [];
+      return state.zones.battlefield.filter(sid => sid === anchorId || card(sid)?.autoStackAnchor === anchorId);
+    }
+
+    function setNodePosition(id) {
+      const c = card(id);
+      const node = document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(id)}"]`);
+      if (c && node) {
+        node.style.left = `${Number(c.x)||0}px`;
+        node.style.top = `${Number(c.y)||0}px`;
+      }
+    }
+
+    function reflow(anchorId) {
+      const anchor = card(anchorId);
+      if (!anchor || zoneOf(anchorId) !== 'battlefield') return;
+      const ids = membersOf(anchorId);
+      const baseX = Number(anchor.x)||0;
+      const baseY = Number(anchor.y)||0;
+      ids.forEach((sid,index) => {
+        const c = card(sid);
+        if (!c) return;
+        if (sid === anchorId) delete c.autoStackAnchor;
+        else c.autoStackAnchor = anchorId;
+        c.x = baseX + index * 10;
+        c.y = baseY + index * 14;
+        setNodePosition(sid);
+      });
+    }
+
+    function detachOne(id) {
+      const c = card(id);
+      if (!c || zoneOf(id) !== 'battlefield') return;
+
+      if (c.autoStackAnchor) {
+        const oldAnchor = c.autoStackAnchor;
+        delete c.autoStackAnchor;
+        reflow(oldAnchor);
+        return;
+      }
+
+      const children = state.zones.battlefield.filter(sid => card(sid)?.autoStackAnchor === id);
+      if (!children.length) return;
+
+      const baseX = Number(c.x)||0;
+      const baseY = Number(c.y)||0;
+      const nextAnchorId = children[0];
+      const nextAnchor = card(nextAnchorId);
+      if (!nextAnchor) return;
+
+      delete nextAnchor.autoStackAnchor;
+      nextAnchor.x = baseX;
+      nextAnchor.y = baseY;
+      children.slice(1).forEach(sid => {
+        const m = card(sid);
+        if (m) m.autoStackAnchor = nextAnchorId;
+      });
+      reflow(nextAnchorId);
+    }
+
+    function clearApproachHint() {
+      document.querySelectorAll('.forge-stack-approach-hint').forEach(x => x.remove());
+    }
+
+    function drawApproachHint(targetEl,direction) {
+      clearApproachHint();
+      if (!targetEl || !direction) return;
+      const hint = document.createElement('span');
+      hint.className = `forge-stack-approach-hint ${direction}`;
+      hint.textContent = direction === 'above' ? '↑ Put on top' : '↓ Put underneath';
+      targetEl.appendChild(hint);
+    }
+
+    function rectOverlap(a,b) {
+      const left = Math.max(a.left,b.left);
+      const right = Math.min(a.right,b.right);
+      const top = Math.max(a.top,b.top);
+      const bottom = Math.min(a.bottom,b.bottom);
+      return Math.max(0,right-left) * Math.max(0,bottom-top);
+    }
+
+    function currentDragRect(el,ghost,clientX,clientY,grabOffsetX,grabOffsetY,sourceWidth,sourceHeight,originZone) {
+      if (originZone === 'battlefield') return el.getBoundingClientRect();
+      return {
+        left:clientX-grabOffsetX,
+        top:clientY-grabOffsetY,
+        right:clientX-grabOffsetX+sourceWidth,
+        bottom:clientY-grabOffsetY+sourceHeight,
+        width:sourceWidth,
+        height:sourceHeight
+      };
+    }
+
+    function matchingTargetForRect(dragRect,id,ignoredIds=[]) {
+      const moving = card(id);
+      if (!moving) return null;
+      let best = null;
+      document.querySelectorAll('#battlefield .remote-card').forEach(node => {
+        const targetId = node.dataset.cardId;
+        if (!targetId || targetId === id || ignoredIds.includes(targetId)) return;
+        const target = card(targetId);
+        if (!target || normName(target) !== normName(moving)) return;
+        const r = node.getBoundingClientRect();
+        const overlap = rectOverlap(dragRect,r);
+        if (overlap <= 0) return;
+        const dragCx=(dragRect.left+dragRect.right)/2, dragCy=(dragRect.top+dragRect.bottom)/2;
+        const targetCx=(r.left+r.right)/2, targetCy=(r.top+r.bottom)/2;
+        const distance=Math.hypot(dragCx-targetCx,dragCy-targetCy);
+        const score=overlap-distance*.15;
+        if (!best || score>best.score) best={targetId,targetEl:node,rect:r,score};
+      });
+      return best;
+    }
+
+    function placeRelative(id,targetId,direction) {
+      const moving = card(id), target = card(targetId);
+      if (!moving || !target || normName(moving)!==normName(target)) return false;
+
+      const targetAnchorId = anchorIdFor(targetId);
+      const targetGroup = membersOf(targetAnchorId).filter(sid => sid !== id);
+      const targetIndex = targetGroup.indexOf(targetId);
+      if (targetIndex < 0) return false;
+
+      const targetAnchor = card(targetAnchorId);
+      const baseX = Number(targetAnchor?.x)||0;
+      const baseY = Number(targetAnchor?.y)||0;
+
+      if (zoneOf(id)==='battlefield') detachOne(id);
+      removeFromZones(id);
+
+      const order=[...targetGroup];
+      const insertAt = direction==='above' ? targetIndex+1 : targetIndex;
+      order.splice(insertAt,0,id);
+      const unique=[...new Set(order)].filter(sid => !!card(sid));
+
+      state.zones.battlefield = state.zones.battlefield.filter(sid => !unique.includes(sid));
+      state.zones.battlefield.push(...unique);
+
+      const newAnchorId=unique[0];
+      unique.forEach((sid,index) => {
+        const c=card(sid);
+        if (!c) return;
+        if (sid===newAnchorId) delete c.autoStackAnchor;
+        else c.autoStackAnchor=newAnchorId;
+        c.x=baseX+index*10;
+        c.y=baseY+index*14;
+      });
+
+      logEvent(`${moving.name}: placed ${direction==='above'?'on top of':'under'} matching permanent.`);
+      render();
+      scheduleSave();
+      return true;
+    }
+
+    qolEnablePointerDrag = function(el,id,originZone) {
+      if (!el || !['battlefield','hand','command'].includes(originZone)) return;
+      el.draggable=false;
+      el.style.touchAction='none';
+
+      let pointerId=null,startX=0,startY=0,dragging=false,ghost=null,lastDropZone=null;
+      let grabOffsetX=0,grabOffsetY=0,grabRatioX=.5,grabRatioY=.5,sourceWidth=1,sourceHeight=1;
+      let movingStackIds=[id],movingStackStart=new Map(),approachTargetId=null,approachDirection=null;
+      let previousCenterY=null;
+
+      const cleanup=()=>{
+        draggedId=null;
+        document.body.classList.remove('qol-drag-mode');
+        el.classList.remove('qol-dragging-card');
+        lastDropZone?.classList.remove('drag-over');
+        lastDropZone=null;
+        ghost?.remove();
+        ghost=null;
+        clearApproachHint();
+      };
+
+      const positionGhost=(x,y)=>{
+        if (!ghost) return;
+        ghost.style.left=`${x-grabOffsetX}px`;
+        ghost.style.top=`${y-grabOffsetY}px`;
+      };
+
+      const onMove=e=>{
+        if (pointerId!==e.pointerId) return;
+        const dx=e.clientX-startX,dy=e.clientY-startY;
+        if (!dragging && Math.hypot(dx,dy)<7) return;
+
+        if (!dragging) {
+          dragging=true;
+          checkpoint();
+          draggedId=id;
+          document.body.classList.add('qol-drag-mode');
+          el.classList.add('qol-dragging-card');
+
+          if (originZone==='battlefield' && movingStackIds.length===1) {
+            detachOne(id);
+            const c=card(id);
+            movingStackStart=new Map([[id,{x:Number(c?.x)||0,y:Number(c?.y)||0}]]);
+          }
+
+          if (originZone!=='battlefield') {
+            ghost=el.cloneNode(true);
+            ghost.className='qol-drag-ghost';
+            ghost.removeAttribute('style');
+            ghost.style.width=`${sourceWidth}px`;
+            ghost.style.height=`${sourceHeight}px`;
+            ghost.style.transform='none';
+            ghost.style.pointerEvents='none';
+            document.body.appendChild(ghost);
+            positionGhost(e.clientX,e.clientY);
+          }
+        }
+
+        e.preventDefault();
+
+        if (originZone==='battlefield') {
+          movingStackIds.forEach(sid => {
+            const c=card(sid), start=movingStackStart.get(sid);
+            if (!c || !start) return;
+            c.x=Math.max(0,start.x+dx);
+            c.y=Math.max(0,start.y+dy);
+            setNodePosition(sid);
+          });
+        } else positionGhost(e.clientX,e.clientY);
+
+        const dropZone=qolDropTargetAt(e.clientX,e.clientY,el);
+        if (lastDropZone!==dropZone) {
+          lastDropZone?.classList.remove('drag-over');
+          dropZone?.classList.add('drag-over');
+          lastDropZone=dropZone;
+        }
+
+        if (movingStackIds.length===1) {
+          const dragRect=currentDragRect(el,ghost,e.clientX,e.clientY,grabOffsetX,grabOffsetY,sourceWidth,sourceHeight,originZone);
+          const candidate=matchingTargetForRect(dragRect,id,movingStackIds);
+          const centerY=(dragRect.top+dragRect.bottom)/2;
+
+          if (candidate) {
+            if (candidate.targetId!==approachTargetId) {
+              approachTargetId=candidate.targetId;
+              const targetCenterY=(candidate.rect.top+candidate.rect.bottom)/2;
+              const referenceY=previousCenterY ?? centerY;
+              approachDirection=referenceY<=targetCenterY?'above':'below';
+            }
+            drawApproachHint(candidate.targetEl,approachDirection);
+          } else {
+            approachTargetId=null;
+            approachDirection=null;
+            clearApproachHint();
+          }
+          previousCenterY=centerY;
+        }
+      };
+
+      const onUp=e=>{
+        if (pointerId!==e.pointerId) return;
+        try{el.releasePointerCapture(pointerId);}catch{}
+        if (!dragging) { pointerId=null; clearApproachHint(); return; }
+
+        qolSuppressCardClicksUntil=Date.now()+420;
+        const dragRect=currentDragRect(el,ghost,e.clientX,e.clientY,grabOffsetX,grabOffsetY,sourceWidth,sourceHeight,originZone);
+        const candidate=movingStackIds.length===1 ? matchingTargetForRect(dragRect,id,movingStackIds) : null;
+        const target=qolDropTargetAt(e.clientX,e.clientY,el);
+        const targetZone=target?.dataset.dropZone;
+        const origin=zoneOf(id);
+        const wholeStackIds=[...movingStackIds];
+        const direction=(candidate?.targetId===approachTargetId && approachDirection) ? approachDirection : approachDirection;
+
+        cleanup();
+        pointerId=null;
+
+        if (candidate && direction && targetZone==='battlefield') {
+          placeRelative(id,candidate.targetId,direction);
+          return;
+        }
+
+        if (movingStackIds.length>1) {
+          if (targetZone==='battlefield' || (!targetZone && originZone==='battlefield')) {
+            logEvent(`${card(id)?.name||'Stack'}: stack repositioned.`);
+            scheduleSave();
+          } else if (targetZone) {
+            wholeStackIds.forEach(sid => moveCard(sid,targetZone==='library'?'library':targetZone,targetZone==='library'?{placement:'top',checkpoint:false}:{checkpoint:false}));
+          } else {
+            history.pop();
+            render();
+          }
+          return;
+        }
+
+        if (targetZone) {
+          if (targetZone==='battlefield') {
+            if (origin==='battlefield') {
+              logEvent(`${card(id)?.name||'Card'}: repositioned on battlefield.`);
+              scheduleSave();
+            } else {
+              const bf=$('#battlefield'),rect=bf.getBoundingClientRect(),size=qolBattlefieldCardSize();
+              const x=Math.max(0,e.clientX-rect.left-grabRatioX*size.width+bf.scrollLeft);
+              const y=Math.max(0,e.clientY-rect.top-grabRatioY*size.height+bf.scrollTop);
+              moveCard(id,'battlefield',{x,y,checkpoint:false});
+            }
+          } else if (targetZone==='library') moveCard(id,'library',{placement:'top',checkpoint:false});
+          else moveCard(id,targetZone,{checkpoint:false});
+        } else if (originZone==='battlefield') {
+          scheduleSave();
+        } else {
+          history.pop();
+          render();
+        }
+      };
+
+      el.addEventListener('pointerdown',e=>{
+        if (e.button!==0 || pointerId!==null) return;
+        pointerId=e.pointerId;
+        startX=e.clientX;
+        startY=e.clientY;
+        const rect=el.getBoundingClientRect();
+        sourceWidth=Math.max(1,rect.width);
+        sourceHeight=Math.max(1,rect.height);
+        grabOffsetX=Math.max(0,Math.min(sourceWidth,e.clientX-rect.left));
+        grabOffsetY=Math.max(0,Math.min(sourceHeight,e.clientY-rect.top));
+        grabRatioX=grabOffsetX/sourceWidth;
+        grabRatioY=grabOffsetY/sourceHeight;
+
+        if (originZone==='battlefield' && e.shiftKey) {
+          const group=membersOf(anchorIdFor(id));
+          movingStackIds=group.length>1?group:[id];
+        } else movingStackIds=[id];
+
+        movingStackStart=new Map(movingStackIds.map(sid=>[sid,{x:Number(card(sid)?.x)||0,y:Number(card(sid)?.y)||0}]));
+        approachTargetId=null;
+        approachDirection=null;
+        previousCenterY=(rect.top+rect.bottom)/2;
+        try{el.setPointerCapture(pointerId);}catch{}
+      });
+
+      el.addEventListener('pointermove',onMove);
+      el.addEventListener('pointerup',onUp);
+      el.addEventListener('pointercancel',onUp);
+      el.addEventListener('click',e=>{
+        if (Date.now()<qolSuppressCardClicksUntil) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      },true);
+    };
+  })();
