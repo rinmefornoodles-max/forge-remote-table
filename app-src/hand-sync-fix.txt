@@ -4,6 +4,9 @@
   // The visual hand must always match state.zones.hand, but unrelated table
   // renders should leave the existing hand DOM alone so the fan does not wiggle.
   (() => {
+    let forgeHandSyncing = false;
+    let forgeHandObserver = null;
+
     function forgeHandDomIds() {
       const hand = $('#hand');
       if (!hand) return [];
@@ -16,28 +19,78 @@
       return a.length === b.length && a.every((id,index) => id === b[index]);
     }
 
+    function forgeUpdateHandCount() {
+      const count = state?.zones?.hand?.length || 0;
+      const label = $('#hand-count');
+      if (label) label.textContent = `${count} card${count===1?'':'s'}`;
+    }
+
     function forgeRebuildHandFromState() {
       const hand = $('#hand');
-      if (!hand || !state?.started) return;
-      hand.innerHTML = '';
-      for (const id of state.zones.hand) {
-        if (card(id)) hand.appendChild(makeCardElement(id,'hand'));
+      if (!hand || !state?.started || forgeHandSyncing) return;
+      forgeHandSyncing = true;
+      try {
+        hand.replaceChildren(...state.zones.hand
+          .filter(id => card(id))
+          .map(id => makeCardElement(id,'hand')));
+        forgeUpdateHandCount();
+      } finally {
+        forgeHandSyncing = false;
       }
-      $('#hand-count').textContent = `${state.zones.hand.length} card${state.zones.hand.length===1?'':'s'}`;
       requestAnimationFrame(() => forgeLayoutHand());
     }
 
     function forgeEnsureHandMatchesState() {
-      if (!state?.started) return;
-      const shown = forgeHandDomIds();
+      const hand = $('#hand');
+      if (!hand || !state?.started || forgeHandSyncing) return;
+
       const actual = [...state.zones.hand];
-      if (!forgeSameIds(shown,actual)) forgeRebuildHandFromState();
+      const actualSet = new Set(actual);
+      let removed = false;
+
+      // Hard invariant: a DOM card is never allowed to remain in the hand if
+      // its real card id is no longer in state.zones.hand.
+      forgeHandSyncing = true;
+      try {
+        for (const el of [...hand.querySelectorAll(':scope > .remote-card')]) {
+          const id = el.dataset.cardId;
+          if (!id || !actualSet.has(id)) {
+            el.remove();
+            removed = true;
+          }
+        }
+      } finally {
+        forgeHandSyncing = false;
+      }
+
+      const shown = forgeHandDomIds();
+      if (!forgeSameIds(shown,actual)) {
+        forgeRebuildHandFromState();
+        return;
+      }
+
+      forgeUpdateHandCount();
+      if (removed) requestAnimationFrame(() => forgeLayoutHand());
+    }
+
+    function forgeInstallHandObserver() {
+      const hand = $('#hand');
+      if (!hand || forgeHandObserver) return;
+      forgeHandObserver = new MutationObserver(() => {
+        if (forgeHandSyncing) return;
+        // Let the render that caused the mutation finish, then enforce state.
+        queueMicrotask(forgeEnsureHandMatchesState);
+        requestAnimationFrame(forgeEnsureHandMatchesState);
+      });
+      forgeHandObserver.observe(hand,{childList:true});
     }
 
     const forgeHandSyncBaseRender = render;
     render = function() {
       forgeHandSyncBaseRender();
+      forgeInstallHandObserver();
       forgeEnsureHandMatchesState();
+      requestAnimationFrame(forgeEnsureHandMatchesState);
     };
 
     // Post-drop safety net. Pointer-capture can make a hand card's pointerup
@@ -91,20 +144,19 @@
           moveCard(drag.id,'battlefield',{x,y,checkpoint:false});
         }
 
-        // And regardless of which render wrapper ran, never leave a stale copy
-        // visibly sitting in the hand once the card's real zone is battlefield.
-        if (zoneOf(drag.id) === 'battlefield') {
-          const stale = $('#hand')?.querySelector(`:scope > .remote-card[data-card-id="${CSS.escape(drag.id)}"]`);
-          stale?.remove();
-          $('#hand-count').textContent = `${state.zones.hand.length} card${state.zones.hand.length===1?'':'s'}`;
-          forgeEnsureHandMatchesState();
-          requestAnimationFrame(() => forgeLayoutHand());
-          scheduleSave();
-        }
+        // Enforce immediately, then again on the next frames in case another
+        // queued render tries to restore stale hand DOM afterward.
+        forgeEnsureHandMatchesState();
+        requestAnimationFrame(forgeEnsureHandMatchesState);
+        setTimeout(forgeEnsureHandMatchesState,50);
+        setTimeout(forgeEnsureHandMatchesState,160);
+        scheduleSave();
       },0);
     }, true);
 
     document.addEventListener('pointercancel', e => {
       if (handDrag?.pointerId === e.pointerId) handDrag = null;
     }, true);
+
+    forgeInstallHandObserver();
   })();
