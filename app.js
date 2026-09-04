@@ -9,6 +9,7 @@
     './app-src/qol-internal.txt',
     './app-src/qol-fixes.txt',
     './app-src/interaction-animations.txt',
+    './app-src/randomizer-3d.txt',
     './app-src/part-04.txt'
   ];
 
