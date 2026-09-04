@@ -80,3 +80,164 @@
       }
     `;
   })();
+
+  // Universal top/bottom stacking.
+  // Any card may be stacked onto any battlefield card. The half of the target
+  // under the mouse at release decides the exact order.
+  (() => {
+    let forgeUniversalStackDrag = null;
+
+    function forgeStackAnchor(id) {
+      const c = card(id);
+      return c?.autoStackAnchor && card(c.autoStackAnchor) ? c.autoStackAnchor : id;
+    }
+
+    function forgeStackMembersAny(anchorId) {
+      return state.zones.battlefield.filter(id => id === anchorId || card(id)?.autoStackAnchor === anchorId);
+    }
+
+    function forgeReflowAnyStack(anchorId) {
+      const anchor = card(anchorId);
+      if (!anchor || zoneOf(anchorId) !== 'battlefield') return;
+      const ids = forgeStackMembersAny(anchorId);
+      const baseX = Number(anchor.x) || 0;
+      const baseY = Number(anchor.y) || 0;
+      ids.forEach((id,index) => {
+        const c = card(id);
+        if (!c) return;
+        if (id === anchorId) delete c.autoStackAnchor;
+        else c.autoStackAnchor = anchorId;
+        c.x = baseX + index * 10;
+        c.y = baseY + index * 14;
+      });
+    }
+
+    function forgeDetachAnyCard(id) {
+      const c = card(id);
+      if (!c || zoneOf(id) !== 'battlefield') return;
+
+      if (c.autoStackAnchor) {
+        const oldAnchor = c.autoStackAnchor;
+        delete c.autoStackAnchor;
+        forgeReflowAnyStack(oldAnchor);
+        return;
+      }
+
+      const children = state.zones.battlefield.filter(otherId => card(otherId)?.autoStackAnchor === id);
+      if (!children.length) return;
+
+      const baseX = Number(c.x) || 0;
+      const baseY = Number(c.y) || 0;
+      const nextAnchorId = children[0];
+      const nextAnchor = card(nextAnchorId);
+      if (!nextAnchor) return;
+
+      delete nextAnchor.autoStackAnchor;
+      nextAnchor.x = baseX;
+      nextAnchor.y = baseY;
+      for (const childId of children.slice(1)) {
+        const child = card(childId);
+        if (child) child.autoStackAnchor = nextAnchorId;
+      }
+      forgeReflowAnyStack(nextAnchorId);
+    }
+
+    function forgeUniversalTargetAt(x,y,sourceId) {
+      const seen = new Set();
+      for (const node of document.elementsFromPoint(x,y)) {
+        const cardEl = node.closest?.('#battlefield .remote-card');
+        if (!cardEl || seen.has(cardEl)) continue;
+        seen.add(cardEl);
+        const targetId = cardEl.dataset.cardId;
+        if (!targetId || targetId === sourceId || zoneOf(targetId) !== 'battlefield') continue;
+        return { id: targetId, el: cardEl, rect: cardEl.getBoundingClientRect() };
+      }
+      return null;
+    }
+
+    function forgeApplyUniversalStack(sourceId,targetId,direction) {
+      const source = card(sourceId);
+      const target = card(targetId);
+      if (!source || !target || zoneOf(targetId) !== 'battlefield') return false;
+
+      if (zoneOf(sourceId) === 'battlefield') forgeDetachAnyCard(sourceId);
+
+      const targetAnchorId = forgeStackAnchor(targetId);
+      const targetAnchor = card(targetAnchorId);
+      if (!targetAnchor) return false;
+
+      const baseX = Number(targetAnchor.x) || 0;
+      const baseY = Number(targetAnchor.y) || 0;
+      const order = forgeStackMembersAny(targetAnchorId).filter(id => id !== sourceId);
+      const targetIndex = order.indexOf(targetId);
+      if (targetIndex < 0) return false;
+
+      removeFromZones(sourceId);
+      const insertAt = direction === 'above' ? targetIndex + 1 : targetIndex;
+      order.splice(insertAt,0,sourceId);
+
+      const uniqueOrder = [...new Set(order)].filter(id => !!card(id));
+      state.zones.battlefield = state.zones.battlefield.filter(id => !uniqueOrder.includes(id));
+      state.zones.battlefield.push(...uniqueOrder);
+
+      const newAnchorId = uniqueOrder[0];
+      uniqueOrder.forEach((id,index) => {
+        const c = card(id);
+        if (!c) return;
+        if (id === newAnchorId) delete c.autoStackAnchor;
+        else c.autoStackAnchor = newAnchorId;
+        c.x = baseX + index * 10;
+        c.y = baseY + index * 14;
+      });
+
+      logEvent(`${source.name || 'Card'}: stacked ${direction === 'above' ? 'above' : 'below'} ${target.name || 'card'}.`);
+      render();
+      scheduleSave();
+      return true;
+    }
+
+    document.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      const el = event.target.closest?.('.remote-card');
+      const id = el?.dataset.cardId;
+      if (!id || !card(id)) return;
+      const origin = zoneOf(id);
+      if (!['hand','battlefield','command'].includes(origin)) return;
+      forgeUniversalStackDrag = {
+        pointerId: event.pointerId,
+        id,
+        startX: event.clientX,
+        startY: event.clientY,
+        active: false
+      };
+    }, true);
+
+    document.addEventListener('pointermove', event => {
+      const drag = forgeUniversalStackDrag;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      if (!drag.active && Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY) >= 7) drag.active = true;
+    }, true);
+
+    document.addEventListener('pointerup', event => {
+      const drag = forgeUniversalStackDrag;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      forgeUniversalStackDrag = null;
+      if (!drag.active) return;
+
+      const target = forgeUniversalTargetAt(event.clientX,event.clientY,drag.id);
+      if (!target) return;
+      const direction = event.clientY < target.rect.top + target.rect.height / 2 ? 'above' : 'below';
+      const sourceId = drag.id;
+      const targetId = target.id;
+
+      // Run after the normal drag/drop and the older duplicate-only helper.
+      setTimeout(() => {
+        if (!card(sourceId) || !card(targetId) || zoneOf(targetId) !== 'battlefield') return;
+        forgeApplyUniversalStack(sourceId,targetId,direction);
+      }, 25);
+    }, true);
+
+    document.addEventListener('pointercancel', event => {
+      if (forgeUniversalStackDrag && event.pointerId === forgeUniversalStackDrag.pointerId) forgeUniversalStackDrag = null;
+    }, true);
+  })();
