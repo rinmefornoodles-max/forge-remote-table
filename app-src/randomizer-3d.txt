@@ -1,0 +1,271 @@
+
+
+  // --- Real 3D dice + quarter-style coin renderer. ---
+  // Uses Three.js only for the randomizer modal. Falls back to the existing
+  // CSS animation if the 3D module cannot be loaded.
+  let real3dRaf = null;
+  let real3dRunToken = 0;
+  let real3dThreePromise = null;
+
+  function real3dLoadThree() {
+    if (!real3dThreePromise) {
+      real3dThreePromise = import('https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js');
+    }
+    return real3dThreePromise;
+  }
+
+  function real3dCancel() {
+    real3dRunToken += 1;
+    if (real3dRaf) cancelAnimationFrame(real3dRaf);
+    real3dRaf = null;
+  }
+
+  function real3dInstallUi() {
+    luckInstallUi();
+    if ($('#real3d-style')) return;
+    const style = document.createElement('style');
+    style.id = 'real3d-style';
+    style.textContent = `
+      .real3d-shell{width:min(100%,430px);height:290px;position:relative;display:grid;place-items:center;isolation:isolate}
+      .real3d-canvas-wrap{position:absolute;inset:0;display:grid;place-items:center;z-index:2}
+      .real3d-canvas-wrap canvas{width:100%!important;height:100%!important;display:block;filter:drop-shadow(0 18px 18px rgba(0,0,0,.28))}
+      .real3d-floor{position:absolute;left:50%;bottom:40px;width:190px;height:34px;transform:translateX(-50%);border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.42),rgba(0,0,0,.08) 55%,transparent 72%);filter:blur(5px);z-index:1}
+      .real3d-loading{position:relative;z-index:3;color:var(--muted);font-size:13px}
+      .real3d-quarter-note{font-size:11px;color:var(--muted);margin-top:-4px}
+      @media(prefers-reduced-motion:reduce){.real3d-canvas-wrap canvas{filter:none}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  function real3dStage(label='Preparing 3D roll…') {
+    real3dInstallUi();
+    const stage = $('#luck-stage');
+    stage.innerHTML = `<div class="real3d-shell"><div class="real3d-floor"></div><div class="real3d-canvas-wrap"></div><div class="real3d-loading">${escapeHtml(label)}</div></div>`;
+    return stage.querySelector('.real3d-canvas-wrap');
+  }
+
+  function real3dCanvasTexture(THREE, draw, size=512) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    draw(ctx, size);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 4;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  function real3dDieTexture(THREE, value) {
+    const pipLayouts = {
+      1:[[.5,.5]],
+      2:[[.3,.3],[.7,.7]],
+      3:[[.3,.3],[.5,.5],[.7,.7]],
+      4:[[.3,.3],[.7,.3],[.3,.7],[.7,.7]],
+      5:[[.3,.3],[.7,.3],[.5,.5],[.3,.7],[.7,.7]],
+      6:[[.3,.25],[.7,.25],[.3,.5],[.7,.5],[.3,.75],[.7,.75]]
+    };
+    return real3dCanvasTexture(THREE, (ctx,s) => {
+      const g = ctx.createRadialGradient(s*.34,s*.27,s*.04,s*.52,s*.54,s*.72);
+      g.addColorStop(0,'#fffdf5'); g.addColorStop(.62,'#ece7d9'); g.addColorStop(1,'#c9c2b2');
+      ctx.fillStyle=g; ctx.fillRect(0,0,s,s);
+      ctx.strokeStyle='rgba(83,72,57,.22)'; ctx.lineWidth=s*.018; ctx.strokeRect(s*.04,s*.04,s*.92,s*.92);
+      for (const [x,y] of pipLayouts[value]) {
+        const pg=ctx.createRadialGradient(x*s-s*.018,y*s-s*.018,s*.008,x*s,y*s,s*.075);
+        pg.addColorStop(0,'#4b4b48'); pg.addColorStop(.42,'#20211f'); pg.addColorStop(1,'#050606');
+        ctx.fillStyle=pg; ctx.beginPath(); ctx.arc(x*s,y*s,s*.071,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle='rgba(255,255,255,.13)'; ctx.lineWidth=s*.008; ctx.stroke();
+      }
+    });
+  }
+
+  function real3dNumberSprite(THREE, value) {
+    const texture = real3dCanvasTexture(THREE,(ctx,s)=>{
+      ctx.clearRect(0,0,s,s);
+      ctx.beginPath(); ctx.arc(s/2,s/2,s*.42,0,Math.PI*2);
+      const g=ctx.createRadialGradient(s*.4,s*.35,s*.05,s*.5,s*.5,s*.44);
+      g.addColorStop(0,'rgba(250,241,216,.97)');g.addColorStop(1,'rgba(208,194,161,.92)');
+      ctx.fillStyle=g;ctx.fill();
+      ctx.strokeStyle='rgba(77,64,43,.7)';ctx.lineWidth=s*.035;ctx.stroke();
+      ctx.fillStyle='#171815';ctx.font=`900 ${s*.42}px ui-sans-serif,system-ui,sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(value),s/2,s*.52);
+    },256);
+    const material = new THREE.SpriteMaterial({map:texture,transparent:true,depthTest:true,depthWrite:false});
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(.47,.47,.47);
+    return sprite;
+  }
+
+  function real3dQuarterTexture(THREE, side) {
+    return real3dCanvasTexture(THREE,(ctx,s)=>{
+      const cx=s/2, cy=s/2;
+      ctx.clearRect(0,0,s,s);
+      const metal=ctx.createRadialGradient(s*.34,s*.27,s*.02,cx,cy,s*.49);
+      metal.addColorStop(0,'#ffffff');metal.addColorStop(.18,'#e6e8e7');metal.addColorStop(.55,'#b9bdbd');metal.addColorStop(.82,'#d9dbd9');metal.addColorStop(1,'#8e9393');
+      ctx.fillStyle=metal;ctx.beginPath();ctx.arc(cx,cy,s*.492,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='rgba(65,70,70,.5)';ctx.lineWidth=s*.018;ctx.beginPath();ctx.arc(cx,cy,s*.445,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='rgba(255,255,255,.42)';ctx.lineWidth=s*.006;ctx.beginPath();ctx.arc(cx,cy,s*.416,0,Math.PI*2);ctx.stroke();
+
+      ctx.fillStyle='#555b5b';ctx.textAlign='center';ctx.textBaseline='middle';
+      if (side==='heads') {
+        ctx.font=`800 ${s*.062}px ui-sans-serif,system-ui,sans-serif`;ctx.fillText('LIBERTY',cx,s*.105);
+        ctx.font=`700 ${s*.038}px ui-sans-serif,system-ui,sans-serif`;ctx.fillText('IN GOD WE TRUST',cx,s*.866);
+        ctx.font=`700 ${s*.047}px ui-sans-serif,system-ui,sans-serif`;ctx.fillText('2026',cx,s*.925);
+        // Stylized profile relief, quarter-like rather than a photographic reproduction.
+        ctx.save();ctx.translate(s*.51,s*.49);
+        ctx.fillStyle='rgba(83,89,89,.72)';
+        ctx.beginPath();
+        ctx.moveTo(-s*.11,-s*.19);ctx.bezierCurveTo(-s*.02,-s*.28,s*.13,-s*.23,s*.14,-s*.09);
+        ctx.bezierCurveTo(s*.15,-s*.035,s*.20,-s*.02,s*.18,s*.025);
+        ctx.bezierCurveTo(s*.17,s*.055,s*.12,s*.055,s*.115,s*.09);
+        ctx.bezierCurveTo(s*.10,s*.16,s*.025,s*.19,-s*.02,s*.20);
+        ctx.lineTo(-s*.035,s*.30);ctx.lineTo(-s*.19,s*.30);ctx.bezierCurveTo(-s*.16,s*.19,-s*.16,s*.08,-s*.20,-s*.02);
+        ctx.bezierCurveTo(-s*.22,-s*.10,-s*.18,-s*.16,-s*.11,-s*.19);ctx.fill();
+        ctx.fillStyle='rgba(234,237,235,.58)';ctx.beginPath();ctx.arc(s*.03,-s*.105,s*.025,0,Math.PI*2);ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.font=`800 ${s*.050}px ui-sans-serif,system-ui,sans-serif`;ctx.fillText('UNITED STATES OF AMERICA',cx,s*.105);
+        ctx.font=`700 ${s*.038}px ui-sans-serif,system-ui,sans-serif`;ctx.fillText('E PLURIBUS UNUM',cx,s*.875);
+        ctx.font=`800 ${s*.050}px ui-sans-serif,system-ui,sans-serif`;ctx.fillText('QUARTER DOLLAR',cx,s*.928);
+        // Stylized eagle relief.
+        ctx.save();ctx.translate(cx,s*.50);ctx.fillStyle='rgba(78,84,84,.76)';
+        ctx.beginPath();ctx.moveTo(0,-s*.09);ctx.lineTo(-s*.12,-s*.02);ctx.lineTo(-s*.29,-s*.10);ctx.lineTo(-s*.20,s*.02);ctx.lineTo(-s*.35,s*.08);ctx.lineTo(-s*.18,s*.10);ctx.lineTo(-s*.24,s*.20);ctx.lineTo(-s*.06,s*.13);ctx.lineTo(0,s*.23);ctx.lineTo(s*.06,s*.13);ctx.lineTo(s*.24,s*.20);ctx.lineTo(s*.18,s*.10);ctx.lineTo(s*.35,s*.08);ctx.lineTo(s*.20,s*.02);ctx.lineTo(s*.29,-s*.10);ctx.lineTo(s*.12,-s*.02);ctx.closePath();ctx.fill();
+        ctx.fillStyle='rgba(235,238,236,.55)';ctx.beginPath();ctx.arc(0,-s*.105,s*.026,0,Math.PI*2);ctx.fill();ctx.restore();
+      }
+      // Mint-like beads around rim.
+      ctx.fillStyle='rgba(74,80,80,.48)';
+      for(let i=0;i<72;i++){const a=i*Math.PI*2/72;ctx.beginPath();ctx.arc(cx+Math.cos(a)*s*.405,cy+Math.sin(a)*s*.405,s*.0065,0,Math.PI*2);ctx.fill();}
+    });
+  }
+
+  function real3dQuarterEdgeTexture(THREE) {
+    const canvas=document.createElement('canvas');canvas.width=512;canvas.height=64;const ctx=canvas.getContext('2d');
+    const g=ctx.createLinearGradient(0,0,0,64);g.addColorStop(0,'#c7cbca');g.addColorStop(.45,'#888e8e');g.addColorStop(.58,'#eceeed');g.addColorStop(1,'#747979');ctx.fillStyle=g;ctx.fillRect(0,0,512,64);
+    for(let x=0;x<512;x+=8){ctx.fillStyle='rgba(45,50,50,.48)';ctx.fillRect(x,0,2,64);ctx.fillStyle='rgba(255,255,255,.35)';ctx.fillRect(x+2,0,1,64);}
+    const tex=new THREE.CanvasTexture(canvas);tex.wrapS=THREE.RepeatWrapping;tex.colorSpace=THREE.SRGBColorSpace;tex.needsUpdate=true;return tex;
+  }
+
+  function real3dRenderer(THREE, host) {
+    host.innerHTML='';
+    const width=Math.max(300,host.clientWidth||390), height=Math.max(250,host.clientHeight||290);
+    const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+    renderer.setSize(width,height,false);
+    renderer.setClearColor(0x000000,0);
+    renderer.outputColorSpace=THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled=true;
+    renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+    host.appendChild(renderer.domElement);
+
+    const scene=new THREE.Scene();
+    const camera=new THREE.PerspectiveCamera(34,width/height,.1,100);camera.position.set(0,0,6.3);
+    const ambient=new THREE.HemisphereLight(0xffffff,0x252a28,1.55);scene.add(ambient);
+    const key=new THREE.DirectionalLight(0xffffff,3.0);key.position.set(3.8,5.2,5);key.castShadow=true;scene.add(key);
+    const rim=new THREE.DirectionalLight(0xd7e0dc,1.15);rim.position.set(-4,-1,3);scene.add(rim);
+    return {renderer,scene,camera,width,height};
+  }
+
+  function real3dEase(t){return 1-Math.pow(1-t,3);}
+
+  async function real3dRollDie(sides) {
+    sides=sides===6?6:20;
+    const result=1+Math.floor(Math.random()*sides);
+    real3dCancel();
+    luckShowModal('3D DICE ROLL',`Rolling D${sides}`);
+    $('#random-result').textContent=`Rolling d${sides}…`;
+    $('#luck-sub').textContent='Tumbling across the table…';
+    const host=real3dStage('Building 3D die…');
+    const token=++real3dRunToken;
+    try {
+      const THREE=await real3dLoadThree();
+      if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+      host.parentElement.querySelector('.real3d-loading')?.remove();
+      const env=real3dRenderer(THREE,host);
+      const group=new THREE.Group();env.scene.add(group);
+
+      let finalEuler=new THREE.Euler(0,0,0,'XYZ');
+      let labels=[];
+      if(sides===6){
+        const values=[3,4,2,5,1,6];
+        const materials=values.map(v=>new THREE.MeshStandardMaterial({map:real3dDieTexture(THREE,v),roughness:.48,metalness:.03}));
+        const mesh=new THREE.Mesh(new THREE.BoxGeometry(2.15,2.15,2.15),materials);mesh.castShadow=true;group.add(mesh);
+        const target={1:[0,0,0],6:[0,Math.PI,0],3:[0,-Math.PI/2,0],4:[0,Math.PI/2,0],2:[Math.PI/2,0,0],5:[-Math.PI/2,0,0]}[result];
+        finalEuler=new THREE.Euler(target[0],target[1],target[2],'XYZ');
+      }else{
+        const geometry=new THREE.IcosahedronGeometry(1.58,0).toNonIndexed();
+        const mesh=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0x26302d,roughness:.34,metalness:.42,flatShading:true}));mesh.castShadow=true;group.add(mesh);
+        const pos=geometry.attributes.position;
+        const faceNormals=[];
+        for(let i=0;i<20;i++){
+          const a=new THREE.Vector3().fromBufferAttribute(pos,i*3),b=new THREE.Vector3().fromBufferAttribute(pos,i*3+1),c=new THREE.Vector3().fromBufferAttribute(pos,i*3+2);
+          const center=a.clone().add(b).add(c).multiplyScalar(1/3);const normal=center.clone().normalize();faceNormals.push(normal);
+          const sprite=real3dNumberSprite(THREE,i+1);sprite.position.copy(normal.clone().multiplyScalar(1.62));sprite.userData.normal=normal.clone();group.add(sprite);labels.push(sprite);
+        }
+        const q=new THREE.Quaternion().setFromUnitVectors(faceNormals[result-1],new THREE.Vector3(0,0,1));finalEuler.setFromQuaternion(q,'XYZ');
+      }
+
+      const sx=-.35, sy=.25, sz=-.18;
+      const endX=finalEuler.x+Math.PI*6,endY=finalEuler.y+Math.PI*8,endZ=finalEuler.z+Math.PI*4;
+      const start=performance.now();const duration=1750;const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      function frame(now){
+        if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+        const raw=reduced?1:Math.min(1,(now-start)/duration),e=real3dEase(raw);
+        group.rotation.set(sx+(endX-sx)*e,sy+(endY-sy)*e,sz+(endZ-sz)*e);
+        group.position.x=-1.25*(1-e);
+        group.position.y=Math.abs(Math.sin(raw*Math.PI*3.15))*.78*(1-raw)-.03;
+        const scale=1+Math.sin(raw*Math.PI*5)*.035*(1-raw);group.scale.setScalar(scale);
+        if(labels.length){const qWorld=group.quaternion;for(const sp of labels){const n=sp.userData.normal.clone().applyQuaternion(qWorld);sp.visible=n.z>.08;}}
+        env.renderer.render(env.scene,env.camera);
+        if(raw<1){real3dRaf=requestAnimationFrame(frame);}else{
+          real3dRaf=null;group.rotation.copy(finalEuler);group.position.set(0,0,0);group.scale.setScalar(1);
+          if(labels.length){for(const sp of labels){const n=sp.userData.normal.clone().applyQuaternion(group.quaternion);sp.visible=n.z>.08;}}
+          env.renderer.render(env.scene,env.camera);
+          $('#luck-result').textContent=`D${sides}: ${result}`;$('#luck-sub').textContent=result===sides?`Natural ${result}!`:'The die landed on the result.';$('#random-result').textContent=`d${sides}: ${result}`;logEvent(`Rolled d${sides}: ${result}.`);luckSparks();
+          luckAction(`Roll D${sides} again`,'btn primary',()=>real3dRollDie(sides));luckAction('Other die','btn ghost',()=>{luckClose();luckShowDicePicker();});
+        }
+      }
+      real3dRaf=requestAnimationFrame(frame);
+    }catch(err){console.warn('3D dice unavailable; using CSS fallback.',err);luckRollDieFallback(sides,result);}
+  }
+
+  function luckRollDieFallback(sides,result){
+    // Preserve a working result if WebGL/CDN loading is unavailable.
+    $('#luck-stage').innerHTML=`<div class="luck-d20 luck-object"><span class="luck-d20-number">${result}</span></div>`;
+    $('#luck-result').textContent=`D${sides}: ${result}`;$('#luck-sub').textContent='3D rendering was unavailable, so the result is shown directly.';$('#random-result').textContent=`d${sides}: ${result}`;logEvent(`Rolled d${sides}: ${result}.`);luckAction(`Roll D${sides} again`,'btn primary',()=>real3dRollDie(sides));
+  }
+
+  async function real3dFlipQuarter() {
+    const result=Math.random()<.5?'Heads':'Tails';
+    real3dCancel();luckShowModal('COIN FLIP','Flipping a quarter');$('#random-result').textContent='Flipping quarter…';$('#luck-sub').textContent='The quarter is in the air…';
+    const host=real3dStage('Minting quarter…');const token=++real3dRunToken;
+    try{
+      const THREE=await real3dLoadThree();if(token!==real3dRunToken||$('#luck-modal').hidden)return;host.parentElement.querySelector('.real3d-loading')?.remove();
+      const env=real3dRenderer(THREE,host);env.camera.position.set(0,0,6.7);
+      const heads=real3dQuarterTexture(THREE,'heads'),tails=real3dQuarterTexture(THREE,'tails'),edge=real3dQuarterEdgeTexture(THREE);
+      const mats=[new THREE.MeshStandardMaterial({map:edge,metalness:.7,roughness:.28}),new THREE.MeshStandardMaterial({map:heads,metalness:.52,roughness:.30}),new THREE.MeshStandardMaterial({map:tails,metalness:.52,roughness:.30})];
+      const coin=new THREE.Mesh(new THREE.CylinderGeometry(1.45,1.45,.18,96,1,false),mats);coin.castShadow=true;env.scene.add(coin);
+      const base=Math.PI/2;const flips=result==='Heads'?10:11;const endX=base+flips*Math.PI;const startX=base-.15;
+      const start=performance.now(),duration=1850;const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      function frame(now){
+        if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+        const raw=reduced?1:Math.min(1,(now-start)/duration),e=real3dEase(raw);
+        coin.rotation.x=startX+(endX-startX)*e;coin.rotation.y=Math.sin(raw*Math.PI*4)*.34*(1-raw);coin.rotation.z=Math.sin(raw*Math.PI*3)*.14*(1-raw);
+        coin.position.x=-.85*(1-e);coin.position.y=Math.sin(raw*Math.PI)*1.55+Math.abs(Math.sin(raw*Math.PI*4))*.25*(1-raw);
+        env.renderer.render(env.scene,env.camera);
+        if(raw<1){real3dRaf=requestAnimationFrame(frame);}else{
+          real3dRaf=null;coin.rotation.set(result==='Heads'?base:base+Math.PI,0,0);coin.position.set(0,0,0);env.renderer.render(env.scene,env.camera);
+          $('#luck-result').textContent=result.toUpperCase();$('#luck-sub').innerHTML=`The quarter landed <strong>${result}</strong>.`+`<div class="real3d-quarter-note">Quarter-style silver coin with a ridged edge.</div>`;$('#random-result').textContent=result;logEvent(`Flipped a coin: ${result}.`);luckSparks();luckAction('Flip again','btn primary',real3dFlipQuarter);
+        }
+      }
+      real3dRaf=requestAnimationFrame(frame);
+    }catch(err){console.warn('3D quarter unavailable; using CSS fallback.',err);$('#luck-result').textContent=result.toUpperCase();$('#luck-sub').textContent=`Quarter landed ${result}.`;$('#random-result').textContent=result;logEvent(`Flipped a coin: ${result}.`);luckAction('Flip again','btn primary',real3dFlipQuarter);}
+  }
+
+  // Override the previous randomizer functions while keeping the same buttons/UI.
+  luckRollDie = function(sides){ return real3dRollDie(sides); };
+  luckFlipCoin = function(){ return real3dFlipQuarter(); };
+
+  // The original close listener was bound before this override file was loaded;
+  // this capture listener cancels an active render loop whenever the modal closes.
+  $('#luck-close')?.addEventListener('click',real3dCancel,true);
+  $('#luck-modal')?.addEventListener('mousedown',e=>{if(e.target===$('#luck-modal'))real3dCancel();},true);
