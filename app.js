@@ -18,6 +18,7 @@
     './app-src/hand-authoritative-sync.txt',
     './app-src/high-res-cards.txt',
     './app-src/floating-card-menu.txt',
+    './app-src/floating-menu-polish.txt',
     './app-src/part-04.txt'
   ];
 
