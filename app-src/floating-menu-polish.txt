@@ -1,0 +1,66 @@
+
+
+  // Floating card-menu polish: larger readable preview and a topmost layer.
+  (() => {
+    if ($('#forge-floating-menu-polish-style')) return;
+    const style = document.createElement('style');
+    style.id = 'forge-floating-menu-polish-style';
+    style.textContent = `
+      #forge-card-menu{
+        z-index:10050!important;
+        width:min(860px,calc(100vw - 28px))!important;
+        max-height:min(900px,calc(100vh - 28px))!important;
+        padding:20px!important;
+        border-radius:18px!important;
+        box-shadow:0 30px 90px rgba(0,0,0,.82),0 0 0 1px rgba(241,199,121,.12) inset!important;
+      }
+      .forge-card-menu-head{margin-bottom:15px!important}
+      .forge-card-menu-head h2{font-size:28px!important}
+      .forge-card-menu-zone{font-size:11px!important}
+      .forge-card-menu-type{font-size:12px!important}
+      .forge-card-menu-close{width:38px!important;height:38px!important;font-size:22px!important}
+      .forge-card-menu-body{
+        grid-template-columns:300px minmax(0,1fr)!important;
+        gap:22px!important;
+      }
+      .forge-card-menu-preview{
+        width:300px!important;
+        border-radius:14px!important;
+        box-shadow:0 18px 46px rgba(0,0,0,.6)!important;
+      }
+      .forge-card-menu-preview img{image-rendering:auto}
+      .forge-card-menu-oracle{
+        max-height:190px!important;
+        padding:12px!important;
+        font-size:12.5px!important;
+        line-height:1.5!important;
+        margin-bottom:12px!important;
+      }
+      .forge-card-menu-section{margin-top:13px!important}
+      .forge-card-menu-section>strong{font-size:10px!important;margin-bottom:7px!important}
+      .forge-card-menu-actions{gap:8px!important}
+      .forge-card-menu-actions button{
+        min-height:42px!important;
+        padding:9px 8px!important;
+        font-size:11px!important;
+      }
+
+      /* Zone viewers stay large, but the floating card menu must always sit above them. */
+      #zone-modal{z-index:100!important}
+      #forge-card-menu{isolation:isolate}
+
+      @media(max-width:1050px){
+        #forge-card-menu{width:min(720px,calc(100vw - 22px))!important;padding:16px!important}
+        .forge-card-menu-body{grid-template-columns:240px minmax(0,1fr)!important;gap:16px!important}
+        .forge-card-menu-preview{width:240px!important}
+        .forge-card-menu-actions{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+      }
+      @media(max-width:700px){
+        #forge-card-menu{width:calc(100vw - 14px)!important;max-height:calc(100vh - 14px)!important;padding:14px!important}
+        .forge-card-menu-body{grid-template-columns:1fr!important}
+        .forge-card-menu-preview{width:min(280px,82vw)!important;margin:0 auto}
+        .forge-card-menu-oracle{max-height:150px!important}
+      }
+    `;
+    document.head.appendChild(style);
+  })();
