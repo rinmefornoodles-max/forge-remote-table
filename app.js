@@ -17,6 +17,7 @@
     './app-src/drag-ghost-cleanup.txt',
     './app-src/hand-authoritative-sync.txt',
     './app-src/high-res-cards.txt',
+    './app-src/stack-move-handle.txt',
     './app-src/floating-card-menu.txt',
     './app-src/floating-menu-polish.txt',
     './app-src/part-04.txt'
