@@ -1,0 +1,219 @@
+
+
+  // --- Card interaction + animated randomness QoL. ---
+  // Single left click is reserved for normal tabletop interaction/dragging.
+  // Right click opens the card inspector. Double left click taps/untaps.
+  let luckAnimationTimer = null;
+  let luckNumberTimer = null;
+
+  function luckInstallUi() {
+    if (!$('#luck-style')) {
+      const style = document.createElement('style');
+      style.id = 'luck-style';
+      style.textContent = `
+        .interaction-hint{color:var(--muted);font-size:10px;margin-top:2px}.interaction-hint strong{color:#d6c19a}
+        .luck-modal{max-width:520px;text-align:center;overflow:hidden}.luck-stage{min-height:300px;display:grid;place-items:center;perspective:900px;position:relative;padding:18px}
+        .luck-stage::before{content:"";position:absolute;inset:12% 8%;border-radius:50%;background:radial-gradient(circle,rgba(208,164,95,.11),transparent 65%);pointer-events:none}
+        .luck-kicker{color:var(--gold);font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase}.luck-title{margin:4px 0 0}.luck-result{min-height:34px;font-size:24px;font-weight:900;color:var(--gold-bright);margin:2px 0 12px}.luck-sub{color:var(--muted);font-size:12px;min-height:18px}
+        .luck-actions{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+        .luck-object{position:relative;z-index:2}.luck-landing{animation:luck-land .3s ease-out}.luck-shadow{position:absolute;left:50%;top:71%;width:150px;height:34px;transform:translateX(-50%);border-radius:50%;background:rgba(0,0,0,.36);filter:blur(7px);animation:luck-shadow-pulse 1.4s ease-in-out}
+        .luck-cube-wrap{width:140px;height:140px;display:grid;place-items:center;transform-style:preserve-3d}.luck-cube{width:116px;height:116px;position:relative;transform-style:preserve-3d;animation:luck-cube-roll 1.45s cubic-bezier(.17,.67,.18,1.03) forwards}
+        .luck-cube-face{position:absolute;inset:0;display:grid;place-items:center;border:2px solid rgba(241,199,121,.72);border-radius:18px;background:linear-gradient(145deg,#303a34,#101714);box-shadow:inset 0 0 25px rgba(208,164,95,.09);font-size:44px;font-weight:950;color:#fff1cf;text-shadow:0 2px 9px rgba(0,0,0,.55);backface-visibility:hidden}
+        .luck-cube-face.front{transform:translateZ(58px)}.luck-cube-face.back{transform:rotateY(180deg) translateZ(58px)}.luck-cube-face.right{transform:rotateY(90deg) translateZ(58px)}.luck-cube-face.left{transform:rotateY(-90deg) translateZ(58px)}.luck-cube-face.top{transform:rotateX(90deg) translateZ(58px)}.luck-cube-face.bottom{transform:rotateX(-90deg) translateZ(58px)}
+        .luck-d20{width:166px;height:158px;display:grid;place-items:center;clip-path:polygon(50% 0%,84% 12%,100% 43%,88% 78%,50% 100%,12% 78%,0 43%,16% 12%);background:conic-gradient(from 15deg,#27342f,#6f5938,#17201d,#8b6a3c,#26332f,#111816,#7a5d39,#27342f);border:0;position:relative;filter:drop-shadow(0 12px 16px rgba(0,0,0,.45));animation:luck-d20-roll 1.55s cubic-bezier(.17,.67,.18,1.03) forwards}
+        .luck-d20::before{content:"";position:absolute;inset:11px;clip-path:inherit;border:2px solid rgba(241,199,121,.54);background:repeating-conic-gradient(from 5deg,rgba(255,255,255,.07) 0 15deg,transparent 15deg 36deg);pointer-events:none}.luck-d20-number{position:relative;z-index:2;width:76px;height:76px;border-radius:50%;display:grid;place-items:center;background:rgba(8,13,12,.84);border:2px solid var(--gold);font-size:45px;font-weight:950;color:#fff1cf;text-shadow:0 2px 9px rgba(0,0,0,.6)}
+        .luck-coin-scene{width:160px;height:160px;perspective:900px}.luck-coin{width:150px;height:150px;position:relative;transform-style:preserve-3d;animation:luck-coin-flip 1.6s cubic-bezier(.2,.65,.2,1) forwards}.luck-coin-face{position:absolute;inset:0;border-radius:50%;display:grid;place-items:center;backface-visibility:hidden;border:7px solid #a77b3e;background:radial-gradient(circle at 34% 28%,#f3cf83,#b77d37 58%,#68401f);box-shadow:inset 0 0 0 4px rgba(74,45,21,.35),inset 0 0 28px rgba(255,238,188,.25),0 10px 22px rgba(0,0,0,.45);font-size:31px;font-weight:950;color:#4a2c15;text-shadow:0 1px rgba(255,242,201,.35)}.luck-coin-face.back{transform:rotateY(180deg);background:radial-gradient(circle at 34% 28%,#e5c174,#9e682e 58%,#5b371b)}.luck-coin-emblem{width:88px;height:88px;border:3px solid rgba(74,44,20,.55);border-radius:50%;display:grid;place-items:center;font-size:20px;letter-spacing:.05em}
+        .luck-sparks{position:absolute;inset:0;pointer-events:none;overflow:hidden}.luck-spark{position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;background:var(--gold-bright);opacity:0;animation:luck-spark .65s ease-out forwards;animation-delay:var(--delay);transform:rotate(var(--angle)) translateY(-18px)}
+        @keyframes luck-cube-roll{0%{transform:rotateX(0) rotateY(0) rotateZ(0) scale(.86)}24%{transform:rotateX(310deg) rotateY(425deg) rotateZ(120deg) scale(1.06)}56%{transform:rotateX(570deg) rotateY(760deg) rotateZ(305deg) scale(.96)}82%{transform:rotateX(calc(var(--rx) - 110deg)) rotateY(calc(var(--ry) - 85deg)) rotateZ(calc(var(--rz) - 40deg)) scale(1.02)}100%{transform:rotateX(var(--rx)) rotateY(var(--ry)) rotateZ(var(--rz)) scale(1)}}
+        @keyframes luck-d20-roll{0%{transform:rotate(0deg) scale(.72)}25%{transform:rotate(230deg) scale(1.08)}58%{transform:rotate(610deg) scale(.91)}82%{transform:rotate(925deg) scale(1.04)}100%{transform:rotate(1080deg) scale(1)}}
+        @keyframes luck-coin-flip{0%{transform:rotateY(0deg) rotateX(0deg) translateY(20px) scale(.88)}22%{transform:rotateY(510deg) rotateX(22deg) translateY(-54px) scale(1.06)}55%{transform:rotateY(1080deg) rotateX(-18deg) translateY(-16px) scale(.98)}82%{transform:rotateY(calc(var(--coin-end) - 220deg)) rotateX(8deg) translateY(-5px)}100%{transform:rotateY(var(--coin-end)) rotateX(0deg) translateY(0) scale(1)}}
+        @keyframes luck-land{0%{transform:scale(1.05)}55%{transform:scale(.94)}100%{transform:scale(1)}}@keyframes luck-shadow-pulse{0%,100%{transform:translateX(-50%) scale(.72);opacity:.28}50%{transform:translateX(-50%) scale(1.08);opacity:.5}}
+        @keyframes luck-spark{0%{opacity:0;transform:rotate(var(--angle)) translateY(-18px) scale(.5)}20%{opacity:1}100%{opacity:0;transform:rotate(var(--angle)) translateY(-115px) scale(0)}}
+        @media(prefers-reduced-motion:reduce){.luck-cube,.luck-d20,.luck-coin,.luck-shadow{animation-duration:.01ms!important}.luck-spark{display:none}}
+      `;
+      document.head.appendChild(style);
+    }
+
+    if (!$('#luck-modal')) {
+      const modal = document.createElement('div');
+      modal.id = 'luck-modal';
+      modal.className = 'modal-backdrop';
+      modal.hidden = true;
+      modal.innerHTML = `<section class="modal small-modal luck-modal" role="dialog" aria-modal="true" aria-labelledby="luck-title"><button id="luck-close" class="modal-close" type="button" aria-label="Close">×</button><div class="luck-kicker" id="luck-kicker">RANDOMIZER</div><h2 id="luck-title" class="luck-title">Roll</h2><div id="luck-stage" class="luck-stage"></div><div id="luck-result" class="luck-result" aria-live="polite"></div><div id="luck-sub" class="luck-sub"></div><div id="luck-actions" class="luck-actions"></div></section>`;
+      document.body.appendChild(modal);
+      $('#luck-close').addEventListener('click', luckClose);
+      modal.addEventListener('mousedown', e => { if (e.target === modal) luckClose(); });
+    }
+
+    const toolbarCopy = $('#battlefield .interaction-hint') || $('.battlefield-toolbar > div:first-child');
+    if (toolbarCopy && !$('#card-interaction-hint')) {
+      const hint = document.createElement('div');
+      hint.id = 'card-interaction-hint';
+      hint.className = 'interaction-hint';
+      hint.innerHTML = '<strong>Right-click</strong> card menu · <strong>Double left-click</strong> tap/untap · drag to move';
+      toolbarCopy.appendChild(hint);
+    }
+  }
+
+  function luckClearTimers() {
+    if (luckAnimationTimer) clearTimeout(luckAnimationTimer);
+    if (luckNumberTimer) clearInterval(luckNumberTimer);
+    luckAnimationTimer = null;
+    luckNumberTimer = null;
+  }
+
+  function luckClose() {
+    luckClearTimers();
+    const modal = $('#luck-modal');
+    if (modal) modal.hidden = true;
+  }
+
+  function luckSparks() {
+    const stage = $('#luck-stage');
+    if (!stage) return;
+    const sparks = document.createElement('div');
+    sparks.className = 'luck-sparks';
+    for (let i=0;i<14;i++) {
+      const s = document.createElement('span');
+      s.className = 'luck-spark';
+      s.style.setProperty('--angle', `${i * (360/14)}deg`);
+      s.style.setProperty('--delay', `${(i%4)*24}ms`);
+      sparks.appendChild(s);
+    }
+    stage.appendChild(sparks);
+    setTimeout(() => sparks.remove(), 900);
+  }
+
+  function luckShowModal(kind, title) {
+    luckInstallUi();
+    luckClearTimers();
+    $('#luck-kicker').textContent = kind;
+    $('#luck-title').textContent = title;
+    $('#luck-stage').innerHTML = '<div class="luck-shadow"></div>';
+    $('#luck-result').textContent = '';
+    $('#luck-sub').textContent = '';
+    $('#luck-actions').innerHTML = '';
+    $('#luck-modal').hidden = false;
+  }
+
+  function luckAction(label, className, handler) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = className || 'btn';
+    b.textContent = label;
+    b.addEventListener('click', handler);
+    $('#luck-actions').appendChild(b);
+  }
+
+  function luckShowDicePicker() {
+    qolOpenDialog({
+      eyebrow:'DICE', title:'Choose a die',
+      html:'<p class="qol-dialog-copy">Pick the die you want to roll. The result will land visibly on the animated die.</p>',
+      actions:[
+        {label:'Cancel',className:'btn ghost',onClick:qolCloseDialog},
+        {label:'Roll D6',className:'btn',onClick:()=>{qolCloseDialog();luckRollDie(6);}},
+        {label:'Roll D20',className:'btn primary',onClick:()=>{qolCloseDialog();luckRollDie(20);}}
+      ]
+    });
+  }
+
+  function luckRollDie(sides) {
+    sides = sides === 6 ? 6 : 20;
+    const result = 1 + Math.floor(Math.random() * sides);
+    luckShowModal('DICE ROLL', `Rolling D${sides}`);
+    $('#random-result').textContent = `Rolling d${sides}…`;
+    $('#luck-sub').textContent = 'The die is in motion…';
+    const stage = $('#luck-stage');
+
+    if (sides === 6) {
+      const orientation = {
+        1:[720,1080,720], 6:[720,1260,720], 3:[720,990,720],
+        4:[720,1170,720], 2:[630,1080,720], 5:[810,1080,720]
+      }[result];
+      const cube = document.createElement('div');
+      cube.className = 'luck-cube-wrap luck-object';
+      cube.innerHTML = `<div class="luck-cube" style="--rx:${orientation[0]}deg;--ry:${orientation[1]}deg;--rz:${orientation[2]}deg"><div class="luck-cube-face front">1</div><div class="luck-cube-face back">6</div><div class="luck-cube-face right">3</div><div class="luck-cube-face left">4</div><div class="luck-cube-face top">2</div><div class="luck-cube-face bottom">5</div></div>`;
+      stage.appendChild(cube);
+    } else {
+      const d20 = document.createElement('div');
+      d20.className = 'luck-d20 luck-object';
+      d20.innerHTML = `<span class="luck-d20-number">1</span>`;
+      stage.appendChild(d20);
+      const number = d20.querySelector('.luck-d20-number');
+      luckNumberTimer = setInterval(() => { number.textContent = String(1 + Math.floor(Math.random()*20)); }, 72);
+    }
+
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    luckAnimationTimer = setTimeout(() => {
+      if (luckNumberTimer) { clearInterval(luckNumberTimer); luckNumberTimer = null; }
+      const number = $('.luck-d20-number'); if (number) number.textContent = String(result);
+      $('.luck-object')?.classList.add('luck-landing');
+      $('#luck-result').textContent = `D${sides}: ${result}`;
+      $('#luck-sub').textContent = result === sides ? `Natural ${result}!` : 'Result locked in.';
+      $('#random-result').textContent = `d${sides}: ${result}`;
+      logEvent(`Rolled d${sides}: ${result}.`);
+      luckSparks();
+      luckAction(`Roll D${sides} again`,'btn primary',()=>luckRollDie(sides));
+      luckAction('Other die','btn ghost',()=>{luckClose();luckShowDicePicker();});
+      luckAnimationTimer = null;
+    }, reduced ? 30 : 1580);
+  }
+
+  function luckFlipCoin() {
+    const result = Math.random() < .5 ? 'Heads' : 'Tails';
+    const end = result === 'Heads' ? 1800 : 1980;
+    luckShowModal('COIN FLIP', 'Flipping coin');
+    $('#random-result').textContent = 'Flipping…';
+    $('#luck-sub').textContent = 'The coin is in the air…';
+    const stage = $('#luck-stage');
+    const scene = document.createElement('div');
+    scene.className = 'luck-coin-scene luck-object';
+    scene.innerHTML = `<div class="luck-coin" style="--coin-end:${end}deg"><div class="luck-coin-face front"><div class="luck-coin-emblem">HEADS</div></div><div class="luck-coin-face back"><div class="luck-coin-emblem">TAILS</div></div></div>`;
+    stage.appendChild(scene);
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    luckAnimationTimer = setTimeout(() => {
+      scene.classList.add('luck-landing');
+      $('#luck-result').textContent = result;
+      $('#luck-sub').textContent = `The coin landed on ${result}.`;
+      $('#random-result').textContent = result;
+      logEvent(`Coin flip: ${result}.`);
+      luckSparks();
+      luckAction('Flip again','btn primary',luckFlipCoin);
+      luckAction('Done','btn ghost',luckClose);
+      luckAnimationTimer = null;
+    }, reduced ? 30 : 1660);
+  }
+
+  // Capture-phase handlers intentionally run before the legacy card click/randomizer handlers.
+  document.addEventListener('click', e => {
+    const roll = e.target.closest?.('#roll-btn');
+    if (roll) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      luckShowDicePicker();
+      return;
+    }
+    const coin = e.target.closest?.('#coin-btn');
+    if (coin) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      luckFlipCoin();
+      return;
+    }
+    const cardEl = e.target.closest?.('.remote-card');
+    if (cardEl) {
+      // Keep single-left-click from opening the inspector. Dragging and dblclick still work.
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
+  document.addEventListener('contextmenu', e => {
+    const cardEl = e.target.closest?.('.remote-card');
+    if (!cardEl) return;
+    const id = cardEl.dataset.cardId;
+    if (!id || !card(id)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    selectedId = id;
+    openInspector(id);
+  }, true);
+
+  luckInstallUi();
