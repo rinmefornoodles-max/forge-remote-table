@@ -1,14 +1,27 @@
 
 
   // Compatibility/style shim loaded late in the bundle.
-  // Keep Arena-style hand cards above the hand header when they lift on hover.
+  // Keep Arena-style hand cards above the controls and remove the full-width
+  // horizontal bars that visually cut through raised cards.
   (() => {
     if (document.getElementById('forge-hand-layer-fix')) return;
     const style = document.createElement('style');
     style.id = 'forge-hand-layer-fix';
     style.textContent = `
-      .hand-shell{overflow:visible!important}
-      .hand-heading{position:relative!important;z-index:1!important}
+      .hand-shell{
+        overflow:visible!important;
+        border-top:0!important;
+        background:linear-gradient(to bottom,rgba(7,11,10,0) 0,rgba(7,11,10,.55) 38px,rgba(7,11,10,.985) 92px)!important;
+      }
+      .hand-heading{
+        position:relative!important;
+        z-index:1!important;
+        background:transparent!important;
+        border-bottom:0!important;
+        pointer-events:none;
+      }
+      .hand-heading .hand-actions,
+      .hand-heading>div:first-child{pointer-events:auto;background:rgba(11,17,15,.82);border:1px solid rgba(75,98,91,.55);border-radius:9px;padding:4px 7px;backdrop-filter:blur(7px)}
       .hand{position:relative!important;z-index:10!important;overflow:visible!important;isolation:auto!important}
       .hand .remote-card{position:relative}
       .hand .remote-card.forge-hand-focus{z-index:1000!important}
