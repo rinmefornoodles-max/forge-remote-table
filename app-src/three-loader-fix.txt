@@ -1,71 +1,314 @@
 
 
-  // --- Reliable Three.js loader for GitHub Pages. ---
-  // The module loader can fail in some browser/privacy configurations. Load the
-  // classic browser build instead so the randomizer does not silently fall back
-  // to the older flat CSS representation.
+  // --- Reliable Three.js loader + authoritative 3D randomizer renderer. ---
+  // This file loads after randomizer-3d.txt and intentionally replaces its D20
+  // and coin paths so older cached app.js versions still receive the new renderer.
   real3dThreePromise = null;
   real3dLoadThree = function() {
     if (window.THREE) return Promise.resolve(window.THREE);
     if (window.__forgeRemoteThreePromise) return window.__forgeRemoteThreePromise;
-
     window.__forgeRemoteThreePromise = new Promise((resolve, reject) => {
-      const finish = () => window.THREE ? resolve(window.THREE) : reject(new Error('Three.js loaded without a global THREE object.'));
+      const finish = () => window.THREE ? resolve(window.THREE) : reject(new Error('Three.js loaded without THREE.'));
       const existing = document.querySelector('script[data-forge-three="true"]');
       if (existing) {
         if (window.THREE) return finish();
-        existing.addEventListener('load', finish, { once:true });
-        existing.addEventListener('error', () => reject(new Error('Three.js failed to load.')), { once:true });
+        existing.addEventListener('load', finish, {once:true});
+        existing.addEventListener('error', () => reject(new Error('Three.js failed to load.')), {once:true});
         return;
       }
-
       const script = document.createElement('script');
       script.src = 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js';
       script.async = true;
       script.crossOrigin = 'anonymous';
       script.referrerPolicy = 'no-referrer';
       script.dataset.forgeThree = 'true';
-      script.addEventListener('load', finish, { once:true });
-      script.addEventListener('error', () => reject(new Error('Three.js failed to load from the 3D renderer CDN.')), { once:true });
+      script.addEventListener('load', finish, {once:true});
+      script.addEventListener('error', () => reject(new Error('Three.js failed to load from CDN.')), {once:true});
       document.head.appendChild(script);
     });
-
     return window.__forgeRemoteThreePromise;
   };
 
-  // Make a renderer failure explicit instead of showing the old faux-3D die.
-  const real3dOriginalRoll = real3dRollDie;
-  real3dRollDie = async function(sides) {
-    try {
-      await real3dLoadThree();
-      return await real3dOriginalRoll(sides);
-    } catch (err) {
-      console.error('Forge Remote Table 3D dice renderer failed:', err);
-      luckShowModal('3D DICE', '3D renderer could not load');
-      $('#luck-stage').innerHTML = '<div class="qol-rule-box" style="max-width:360px;text-align:left"><strong>The actual 3D renderer did not load.</strong><br><br>This is no longer being disguised with the old flat die. Refresh once and try again. If it still fails, the browser or network is blocking the 3D library.</div>';
-      $('#luck-result').textContent = '';
-      $('#luck-sub').textContent = 'No roll was made.';
-      $('#random-result').textContent = '';
+  function forgeFaceNumberTexture(THREE, value) {
+    return real3dCanvasTexture(THREE, (ctx, s) => {
+      ctx.clearRect(0,0,s,s);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      const size = value > 9 ? s * .29 : s * .34;
+      ctx.font = `900 ${size}px Georgia, ui-serif, serif`;
+      ctx.strokeStyle = 'rgba(8,10,9,.96)';
+      ctx.lineWidth = s * .055;
+      ctx.strokeText(String(value), s*.5, s*.53);
+      const g = ctx.createLinearGradient(0,s*.3,0,s*.7);
+      g.addColorStop(0,'#f7e6aa');
+      g.addColorStop(.48,'#d2ad5a');
+      g.addColorStop(1,'#8b682c');
+      ctx.fillStyle = g;
+      ctx.fillText(String(value), s*.5, s*.53);
+      ctx.strokeStyle = 'rgba(255,247,204,.34)';
+      ctx.lineWidth = s * .007;
+      ctx.strokeText(String(value), s*.5, s*.53);
+    }, 256);
+  }
+
+  function forgeFaceNumberMesh(THREE, a, b, c, normal, value) {
+    // A triangle exactly parallel to the die face, offset only enough to avoid z-fighting.
+    // Unlike the old Sprite labels, this physically rotates with its triangular face.
+    const inset = .10;
+    const center = a.clone().add(b).add(c).multiplyScalar(1/3);
+    const aa = a.clone().lerp(center,inset).addScaledVector(normal,.009);
+    const bb = b.clone().lerp(center,inset).addScaledVector(normal,.009);
+    const cc = c.clone().lerp(center,inset).addScaledVector(normal,.009);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      aa.x,aa.y,aa.z, bb.x,bb.y,bb.z, cc.x,cc.y,cc.z
+    ],3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute([
+      .08,.08, .92,.08, .50,.92
+    ],2));
+    geo.computeVertexNormals();
+    const mat = new THREE.MeshBasicMaterial({
+      map: forgeFaceNumberTexture(THREE,value),
+      transparent: true,
+      alphaTest: .015,
+      depthTest: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    });
+    return new THREE.Mesh(geo,mat);
+  }
+
+  function forgeMedallionTexture(THREE, side) {
+    return real3dCanvasTexture(THREE, (ctx,s) => {
+      const cx=s/2, cy=s/2;
+      ctx.clearRect(0,0,s,s);
+      const metal=ctx.createRadialGradient(s*.34,s*.25,s*.025,cx,cy,s*.51);
+      metal.addColorStop(0,'#ddc56d');
+      metal.addColorStop(.18,'#9d8038');
+      metal.addColorStop(.44,'#514522');
+      metal.addColorStop(.68,'#8d7231');
+      metal.addColorStop(.86,'#3d331d');
+      metal.addColorStop(1,'#17150f');
+      ctx.fillStyle=metal;
+      ctx.beginPath();ctx.arc(cx,cy,s*.495,0,Math.PI*2);ctx.fill();
+
+      // Heavy antique rim and recessed concentric rings.
+      ctx.strokeStyle='#18150e';ctx.lineWidth=s*.045;ctx.beginPath();ctx.arc(cx,cy,s*.452,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='#b29445';ctx.lineWidth=s*.015;ctx.beginPath();ctx.arc(cx,cy,s*.426,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='#292316';ctx.lineWidth=s*.024;ctx.beginPath();ctx.arc(cx,cy,s*.350,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='rgba(207,174,75,.72)';ctx.lineWidth=s*.008;ctx.beginPath();ctx.arc(cx,cy,s*.324,0,Math.PI*2);ctx.stroke();
+
+      // Repeating engraved teeth around the rim, like a fantasy challenge coin.
+      for(let i=0;i<40;i++){
+        const a=i*Math.PI*2/40;
+        ctx.save();ctx.translate(cx+Math.cos(a)*s*.397,cy+Math.sin(a)*s*.397);ctx.rotate(a);
+        ctx.fillStyle=i%2?'#201b12':'#8f7132';
+        ctx.beginPath();ctx.moveTo(-s*.007,-s*.025);ctx.lineTo(s*.007,-s*.025);ctx.lineTo(s*.004,s*.026);ctx.lineTo(-s*.004,s*.026);ctx.closePath();ctx.fill();
+        ctx.restore();
+      }
+
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      if(side==='heads'){
+        ctx.fillStyle='#1c1810';
+        ctx.font=`900 ${s*.048}px Georgia,serif`;ctx.fillText('FORGE  •  REMOTE  •  TABLE',cx,s*.118);
+        ctx.font=`700 ${s*.036}px Georgia,serif`;ctx.fillText('YOUR CARDS  •  YOUR CALLS',cx,s*.895);
+
+        // Five elemental medallions surrounding a central forged emblem.
+        const marks=[['✦',0,-.245],['◒',.235,-.075],['✹',.145,.215],['◆',-.145,.215],['≈',-.235,-.075]];
+        for(const [mark,dx,dy] of marks){
+          const x=cx+dx*s,y=cy+dy*s;
+          const mg=ctx.createRadialGradient(x-s*.015,y-s*.018,s*.005,x,y,s*.061);
+          mg.addColorStop(0,'#c7a854');mg.addColorStop(.62,'#6f5929');mg.addColorStop(1,'#2a2316');
+          ctx.fillStyle=mg;ctx.beginPath();ctx.arc(x,y,s*.061,0,Math.PI*2);ctx.fill();
+          ctx.strokeStyle='#16130d';ctx.lineWidth=s*.012;ctx.stroke();
+          ctx.fillStyle='#17140e';ctx.font=`900 ${s*.063}px Georgia,serif`;ctx.fillText(mark,x,y+s*.003);
+        }
+        const cg=ctx.createRadialGradient(cx-s*.05,cy-s*.06,s*.008,cx,cy,s*.165);
+        cg.addColorStop(0,'#d5ba64');cg.addColorStop(.55,'#80682f');cg.addColorStop(1,'#302819');
+        ctx.fillStyle=cg;ctx.beginPath();ctx.arc(cx,cy,s*.165,0,Math.PI*2);ctx.fill();
+        ctx.strokeStyle='#18140d';ctx.lineWidth=s*.018;ctx.stroke();
+        // Hammer / anvil forge symbol.
+        ctx.strokeStyle='#17140e';ctx.fillStyle='#17140e';ctx.lineCap='round';ctx.lineWidth=s*.032;
+        ctx.beginPath();ctx.moveTo(s*.435,s*.575);ctx.lineTo(s*.585,s*.405);ctx.stroke();
+        ctx.save();ctx.translate(s*.598,s*.385);ctx.rotate(-.64);ctx.fillRect(-s*.065,-s*.030,s*.13,s*.060);ctx.restore();
+        ctx.beginPath();ctx.moveTo(s*.405,s*.615);ctx.lineTo(s*.595,s*.615);ctx.lineTo(s*.558,s*.658);ctx.lineTo(s*.442,s*.658);ctx.closePath();ctx.fill();
+      } else {
+        ctx.fillStyle='#1c1810';
+        ctx.font=`900 ${s*.052}px Georgia,serif`;ctx.fillText('COMMANDER FORGE',cx,s*.118);
+        ctx.font=`700 ${s*.034}px Georgia,serif`;ctx.fillText('ADVENTUROUS  •  HEROIC  •  BOUNDLESS',cx,s*.895);
+        // Arcane concentric seal similar in density to a fantasy collectible coin.
+        ctx.save();ctx.translate(cx,cy);
+        ctx.strokeStyle='#1c1810';ctx.lineWidth=s*.012;
+        for(let r=0;r<3;r++){ctx.beginPath();ctx.arc(0,0,s*(.135+r*.055),0,Math.PI*2);ctx.stroke();}
+        ctx.beginPath();
+        for(let i=0;i<12;i++){
+          const a=-Math.PI/2+i*Math.PI*2/12;
+          const rr=i%2?s*.175:s*.295;
+          const x=Math.cos(a)*rr,y=Math.sin(a)*rr;
+          i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+        }
+        ctx.closePath();ctx.stroke();
+        ctx.fillStyle='#1a170f';
+        ctx.font=`900 ${s*.105}px Georgia,serif`;ctx.fillText('CF',0,s*.010);
+        ctx.restore();
+        for(let i=0;i<10;i++){
+          const a=i*Math.PI*2/10;
+          const x=cx+Math.cos(a)*s*.365,y=cy+Math.sin(a)*s*.365;
+          ctx.fillStyle=i%2?'#211c12':'#a18339';ctx.beginPath();ctx.arc(x,y,s*.012,0,Math.PI*2);ctx.fill();
+        }
+      }
+
+      // Patina / wear so it reads as metal rather than flat vector art.
+      ctx.globalAlpha=.15;ctx.strokeStyle='#0d0c09';ctx.lineWidth=1;
+      for(let i=0;i<60;i++){
+        const a=(i*137.5)%360*Math.PI/180;
+        const r=s*(.07+((i*23)%38)/100);
+        const x=cx+Math.cos(a)*r,y=cy+Math.sin(a)*r;
+        ctx.beginPath();ctx.moveTo(x-s*.024,y);ctx.lineTo(x+s*.030,y+s*.005);ctx.stroke();
+      }
+      ctx.globalAlpha=1;
+    });
+  }
+
+  function forgeMedallionEdgeTexture(THREE){
+    const canvas=document.createElement('canvas');canvas.width=512;canvas.height=72;const ctx=canvas.getContext('2d');
+    const g=ctx.createLinearGradient(0,0,0,72);
+    g.addColorStop(0,'#c4a454');g.addColorStop(.22,'#6c5628');g.addColorStop(.48,'#2c2517');g.addColorStop(.72,'#927437');g.addColorStop(1,'#3d311c');
+    ctx.fillStyle=g;ctx.fillRect(0,0,512,72);
+    for(let x=0;x<512;x+=7){ctx.fillStyle='rgba(22,18,11,.76)';ctx.fillRect(x,0,2,72);ctx.fillStyle='rgba(224,190,92,.32)';ctx.fillRect(x+2,0,1,72);}
+    const tex=new THREE.CanvasTexture(canvas);tex.wrapS=THREE.RepeatWrapping;tex.colorSpace=THREE.SRGBColorSpace;tex.needsUpdate=true;return tex;
+  }
+
+  const forgeOriginalCoreRoll = real3dRollDie;
+
+  real3dRollDie = async function(sides){
+    sides = sides===6 ? 6 : 20;
+    if(sides===6) return forgeOriginalCoreRoll(6);
+    const result=1+Math.floor(Math.random()*20);
+    real3dCancel();
+    luckShowModal('3D DICE ROLL','Rolling D20');
+    $('#random-result').textContent='Rolling d20…';
+    $('#luck-sub').textContent='Tumbling across the table…';
+    const host=real3dStage('Building engraved D20…');
+    const token=++real3dRunToken;
+    try{
+      const THREE=await real3dLoadThree();
+      if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+      host.parentElement.querySelector('.real3d-loading')?.remove();
+      const env=real3dRenderer(THREE,host);env.camera.position.set(0,0,6.45);
+      const group=new THREE.Group();env.scene.add(group);
+      const geometry=new THREE.IcosahedronGeometry(1.58,0).toNonIndexed();
+      const die=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0x27332f,roughness:.31,metalness:.46,flatShading:true}));
+      die.castShadow=true;group.add(die);
+      const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geometry,1),new THREE.LineBasicMaterial({color:0x8a6b34,transparent:true,opacity:.66}));group.add(edges);
+      const pos=geometry.attributes.position;
+      const normals=[];
+      for(let i=0;i<20;i++){
+        const a=new THREE.Vector3().fromBufferAttribute(pos,i*3);
+        const b=new THREE.Vector3().fromBufferAttribute(pos,i*3+1);
+        const c=new THREE.Vector3().fromBufferAttribute(pos,i*3+2);
+        const normal=a.clone().add(b).add(c).multiplyScalar(1/3).normalize();
+        normals.push(normal);
+        group.add(forgeFaceNumberMesh(THREE,a,b,c,normal,i+1));
+      }
+      const targetQ=new THREE.Quaternion().setFromUnitVectors(normals[result-1],new THREE.Vector3(0,0,1));
+      const finalEuler=new THREE.Euler().setFromQuaternion(targetQ,'XYZ');
+      const sx=-.42,sy=.34,sz=-.23;
+      const endX=finalEuler.x+Math.PI*6,endY=finalEuler.y+Math.PI*8,endZ=finalEuler.z+Math.PI*4;
+      const start=performance.now(),duration=1820;
+      const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      function frame(now){
+        if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+        const raw=reduced?1:Math.min(1,(now-start)/duration),e=real3dEase(raw);
+        group.rotation.set(sx+(endX-sx)*e,sy+(endY-sy)*e,sz+(endZ-sz)*e);
+        group.position.x=-1.15*(1-e);
+        group.position.y=Math.abs(Math.sin(raw*Math.PI*3.15))*.76*(1-raw)-.02;
+        const sc=1+Math.sin(raw*Math.PI*5)*.035*(1-raw);group.scale.setScalar(sc);
+        env.renderer.render(env.scene,env.camera);
+        if(raw<1) real3dRaf=requestAnimationFrame(frame);
+        else{
+          real3dRaf=null;group.rotation.copy(finalEuler);group.position.set(0,0,0);group.scale.setScalar(1);env.renderer.render(env.scene,env.camera);
+          $('#luck-result').textContent=`D20: ${result}`;
+          $('#luck-sub').textContent=result===20?'Natural 20!':'The numbered face landed on the result.';
+          $('#random-result').textContent=`d20: ${result}`;
+          logEvent(`Rolled d20: ${result}.`);luckSparks();
+          luckAction('Roll D20 again','btn primary',()=>real3dRollDie(20));
+          luckAction('Other die','btn ghost',()=>{luckClose();luckShowDicePicker();});
+        }
+      }
+      real3dRaf=requestAnimationFrame(frame);
+    }catch(err){
+      console.error('Forge D20 renderer failed:',err);
+      luckShowModal('3D DICE','3D renderer could not load');
+      $('#luck-stage').innerHTML='<div class="qol-rule-box" style="max-width:360px;text-align:left"><strong>The true 3D D20 renderer did not load.</strong><br><br>Refresh once and try again.</div>';
+      $('#luck-result').textContent='';$('#luck-sub').textContent='No roll was made.';$('#random-result').textContent='';
       luckAction('Close','btn primary',luckClose);
     }
   };
 
-  const real3dOriginalQuarter = real3dFlipQuarter;
-  real3dFlipQuarter = async function() {
-    try {
-      await real3dLoadThree();
-      return await real3dOriginalQuarter();
-    } catch (err) {
-      console.error('Forge Remote Table 3D quarter renderer failed:', err);
-      luckShowModal('3D COIN', '3D renderer could not load');
-      $('#luck-stage').innerHTML = '<div class="qol-rule-box" style="max-width:360px;text-align:left"><strong>The actual 3D quarter renderer did not load.</strong><br><br>Refresh once and try again. The old flat coin is intentionally not being shown as a substitute.</div>';
-      $('#luck-result').textContent = '';
-      $('#luck-sub').textContent = 'No flip was made.';
-      $('#random-result').textContent = '';
+  real3dFlipQuarter = async function(){
+    const result=Math.random()<.5?'Heads':'Tails';
+    real3dCancel();
+    luckShowModal('COIN FLIP','Flipping Forge medallion');
+    $('#random-result').textContent='Flipping coin…';
+    $('#luck-sub').textContent='The forged brass coin is in the air…';
+    const host=real3dStage('Forging fantasy coin…');
+    const token=++real3dRunToken;
+    try{
+      const THREE=await real3dLoadThree();
+      if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+      host.parentElement.querySelector('.real3d-loading')?.remove();
+      const env=real3dRenderer(THREE,host);env.camera.position.set(0,0,6.7);
+      const heads=forgeMedallionTexture(THREE,'heads');
+      const tails=forgeMedallionTexture(THREE,'tails');
+      const edge=forgeMedallionEdgeTexture(THREE);
+      const mats=[
+        new THREE.MeshStandardMaterial({map:edge,metalness:.82,roughness:.25}),
+        new THREE.MeshStandardMaterial({map:heads,metalness:.66,roughness:.29}),
+        new THREE.MeshStandardMaterial({map:tails,metalness:.66,roughness:.29})
+      ];
+      const coin=new THREE.Mesh(new THREE.CylinderGeometry(1.50,1.50,.24,96,1,false),mats);
+      coin.castShadow=true;env.scene.add(coin);
+      const base=Math.PI/2;
+      const flips=result==='Heads'?10:11;
+      const endX=base+flips*Math.PI;
+      const startX=base-.18;
+      const start=performance.now(),duration=1940;
+      const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      function frame(now){
+        if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+        const raw=reduced?1:Math.min(1,(now-start)/duration),e=real3dEase(raw);
+        coin.rotation.x=startX+(endX-startX)*e;
+        coin.rotation.y=Math.sin(raw*Math.PI*4)*.40*(1-raw);
+        coin.rotation.z=Math.sin(raw*Math.PI*3)*.18*(1-raw);
+        coin.position.x=-.88*(1-e);
+        coin.position.y=Math.sin(raw*Math.PI)*1.60+Math.abs(Math.sin(raw*Math.PI*4))*.26*(1-raw);
+        env.renderer.render(env.scene,env.camera);
+        if(raw<1) real3dRaf=requestAnimationFrame(frame);
+        else{
+          real3dRaf=null;
+          coin.rotation.set(result==='Heads'?base:base+Math.PI,0,0);coin.position.set(0,0,0);env.renderer.render(env.scene,env.camera);
+          $('#luck-result').textContent=result.toUpperCase();
+          $('#luck-sub').innerHTML=`The Forge medallion landed <strong>${result}</strong>.`;
+          $('#random-result').textContent=result;
+          logEvent(`Flipped a coin: ${result}.`);luckSparks();
+          luckAction('Flip again','btn primary',real3dFlipQuarter);
+        }
+      }
+      real3dRaf=requestAnimationFrame(frame);
+    }catch(err){
+      console.error('Forge coin renderer failed:',err);
+      luckShowModal('3D COIN','3D renderer could not load');
+      $('#luck-stage').innerHTML='<div class="qol-rule-box" style="max-width:360px;text-align:left"><strong>The true 3D coin renderer did not load.</strong><br><br>Refresh once and try again.</div>';
+      $('#luck-result').textContent='';$('#luck-sub').textContent='No flip was made.';$('#random-result').textContent='';
       luckAction('Close','btn primary',luckClose);
     }
   };
 
-  // Rebind the public randomizer entry points to the fixed WebGL versions.
-  luckRollDie = function(sides) { return real3dRollDie(sides); };
-  luckFlipCoin = function() { return real3dFlipQuarter(); };
+  // Rebind public entry points after replacing the renderers.
+  luckRollDie = function(sides){ return real3dRollDie(sides); };
+  luckFlipCoin = function(){ return real3dFlipQuarter(); };
