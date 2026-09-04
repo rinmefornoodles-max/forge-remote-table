@@ -15,6 +15,7 @@
     './app-src/tabletop-polish.txt',
     './app-src/hand-sync-fix.txt',
     './app-src/drag-ghost-cleanup.txt',
+    './app-src/hand-authoritative-sync.txt',
     './app-src/part-04.txt'
   ];
 
