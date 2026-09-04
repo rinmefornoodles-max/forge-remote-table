@@ -1,0 +1,190 @@
+
+
+  // --- D20 face-number + antique brass Forge coin art pass. ---
+  // Numbers are texture decals attached to the triangular faces themselves,
+  // not camera-facing sprites. Coin art is an original Forge/Commander medallion
+  // inspired by antique fantasy gaming coins.
+
+  function forgeD20NumberTexture(THREE, value) {
+    return real3dCanvasTexture(THREE, (ctx,s) => {
+      ctx.clearRect(0,0,s,s);
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.font=`900 ${s*(value>9?.27:.32)}px Georgia, ui-serif, serif`;
+      ctx.lineJoin='round';
+      ctx.strokeStyle='rgba(15,16,14,.92)';ctx.lineWidth=s*.038;
+      ctx.strokeText(String(value),s*.5,s*.54);
+      const g=ctx.createLinearGradient(0,s*.3,0,s*.72);
+      g.addColorStop(0,'#fff3c8');g.addColorStop(.45,'#d7b66d');g.addColorStop(1,'#8e6d32');
+      ctx.fillStyle=g;ctx.fillText(String(value),s*.5,s*.54);
+      ctx.strokeStyle='rgba(255,245,205,.35)';ctx.lineWidth=s*.006;ctx.strokeText(String(value),s*.5,s*.54);
+    },256);
+  }
+
+  function forgeD20FaceDecal(THREE,a,b,c,value,normal) {
+    const eps=.008;
+    const positions=new Float32Array([
+      a.x+normal.x*eps,a.y+normal.y*eps,a.z+normal.z*eps,
+      b.x+normal.x*eps,b.y+normal.y*eps,b.z+normal.z*eps,
+      c.x+normal.x*eps,c.y+normal.y*eps,c.z+normal.z*eps
+    ]);
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
+    geo.setAttribute('uv',new THREE.Float32BufferAttribute([.07,.08,.93,.08,.5,.92],2));
+    geo.computeVertexNormals();
+    const mat=new THREE.MeshStandardMaterial({
+      map:forgeD20NumberTexture(THREE,value),transparent:true,alphaTest:.02,
+      metalness:.08,roughness:.5,side:THREE.DoubleSide,depthWrite:false,
+      polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2
+    });
+    return new THREE.Mesh(geo,mat);
+  }
+
+  function forgeCoinTexture(THREE, side) {
+    return real3dCanvasTexture(THREE,(ctx,s)=>{
+      const cx=s/2,cy=s/2;
+      ctx.clearRect(0,0,s,s);
+      const metal=ctx.createRadialGradient(s*.34,s*.27,s*.03,cx,cy,s*.51);
+      metal.addColorStop(0,'#e0c779');metal.addColorStop(.18,'#aa8a42');metal.addColorStop(.47,'#67552c');metal.addColorStop(.72,'#a5873e');metal.addColorStop(1,'#342b19');
+      ctx.fillStyle=metal;ctx.beginPath();ctx.arc(cx,cy,s*.495,0,Math.PI*2);ctx.fill();
+
+      // Dark antique recesses + raised rings.
+      ctx.strokeStyle='#211d14';ctx.lineWidth=s*.038;ctx.beginPath();ctx.arc(cx,cy,s*.452,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='#b79a4a';ctx.lineWidth=s*.014;ctx.beginPath();ctx.arc(cx,cy,s*.428,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='rgba(31,27,18,.9)';ctx.lineWidth=s*.02;ctx.beginPath();ctx.arc(cx,cy,s*.34,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='rgba(215,186,95,.65)';ctx.lineWidth=s*.008;ctx.beginPath();ctx.arc(cx,cy,s*.318,0,Math.PI*2);ctx.stroke();
+
+      // Rim teeth like the supplied fantasy token.
+      for(let i=0;i<36;i++){
+        const a=i*Math.PI*2/36;
+        ctx.save();ctx.translate(cx+Math.cos(a)*s*.405,cy+Math.sin(a)*s*.405);ctx.rotate(a);
+        ctx.fillStyle=i%2?'#302719':'#8d7136';ctx.fillRect(-s*.006,-s*.026,s*.012,s*.052);ctx.restore();
+      }
+
+      if(side==='heads'){
+        ctx.fillStyle='#211c12';ctx.font=`800 ${s*.047}px Georgia,serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.fillText('FORGE  •  REMOTE  •  TABLE',cx,s*.122);
+        ctx.fillText('YOUR CARDS  •  YOUR CALLS',cx,s*.895);
+
+        // Central raised medallion.
+        const cg=ctx.createRadialGradient(cx-s*.05,cy-s*.07,s*.01,cx,cy,s*.205);
+        cg.addColorStop(0,'#d2b765');cg.addColorStop(.55,'#8b7135');cg.addColorStop(1,'#40331e');
+        ctx.fillStyle=cg;ctx.beginPath();ctx.arc(cx,cy,s*.205,0,Math.PI*2);ctx.fill();
+        ctx.strokeStyle='#1d1910';ctx.lineWidth=s*.018;ctx.stroke();
+        // Stylized forge hammer + anvil emblem.
+        ctx.strokeStyle='#17140e';ctx.fillStyle='#17140e';ctx.lineCap='round';
+        ctx.lineWidth=s*.035;ctx.beginPath();ctx.moveTo(s*.43,s*.58);ctx.lineTo(s*.60,s*.39);ctx.stroke();
+        ctx.save();ctx.translate(s*.61,s*.37);ctx.rotate(-.62);ctx.fillRect(-s*.075,-s*.035,s*.15,s*.07);ctx.restore();
+        ctx.beginPath();ctx.moveTo(s*.39,s*.61);ctx.lineTo(s*.61,s*.61);ctx.lineTo(s*.57,s*.66);ctx.lineTo(s*.43,s*.66);ctx.closePath();ctx.fill();
+
+        // Five small mana-color medallions around center.
+        const marks=[['W',-.24,-.11],['U',-.15,.22],['B',.16,.22],['R',.25,-.10],['G',0,-.27]];
+        for(const [m,dx,dy] of marks){
+          const x=cx+dx*s,y=cy+dy*s;
+          ctx.fillStyle='#79622f';ctx.beginPath();ctx.arc(x,y,s*.052,0,Math.PI*2);ctx.fill();
+          ctx.strokeStyle='#211c12';ctx.lineWidth=s*.012;ctx.stroke();
+          ctx.fillStyle='#211c12';ctx.font=`900 ${s*.055}px Georgia,serif`;ctx.fillText(m,x,y+s*.003);
+        }
+      }else{
+        ctx.fillStyle='#211c12';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`800 ${s*.052}px Georgia,serif`;ctx.fillText('COMMANDER FORGE',cx,s*.122);
+        ctx.font=`700 ${s*.037}px Georgia,serif`;ctx.fillText('ADVENTUROUS  •  BOUNDLESS',cx,s*.886);
+
+        // Geometric arcane seal inspired by fantasy medallions.
+        ctx.save();ctx.translate(cx,cy);
+        ctx.strokeStyle='#201b11';ctx.lineWidth=s*.014;
+        for(let r=0;r<3;r++){ctx.beginPath();ctx.arc(0,0,s*(.15+r*.055),0,Math.PI*2);ctx.stroke();}
+        ctx.beginPath();
+        for(let i=0;i<10;i++){
+          const a=-Math.PI/2+i*Math.PI*2/10;const rr=i%2?s*.19:s*.30;const x=Math.cos(a)*rr,y=Math.sin(a)*rr;
+          i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+        }
+        ctx.closePath();ctx.stroke();
+        ctx.fillStyle='#211c12';ctx.font=`900 ${s*.12}px Georgia,serif`;ctx.fillText('CF',0,s*.012);
+        ctx.restore();
+
+        // Small orbital dots.
+        for(let i=0;i<12;i++){
+          const a=i*Math.PI*2/12;ctx.fillStyle=i%2?'#2d2517':'#a0823d';ctx.beginPath();ctx.arc(cx+Math.cos(a)*s*.365,cy+Math.sin(a)*s*.365,s*.012,0,Math.PI*2);ctx.fill();
+        }
+      }
+
+      // Surface wear/patina scratches.
+      ctx.globalAlpha=.18;ctx.strokeStyle='#18150f';ctx.lineWidth=1;
+      for(let i=0;i<52;i++){
+        const a=(i*137.5)%360*Math.PI/180;const r=s*(.08+((i*29)%37)/100);const x=cx+Math.cos(a)*r,y=cy+Math.sin(a)*r;
+        ctx.beginPath();ctx.moveTo(x-s*.025,y);ctx.lineTo(x+s*.035,y+s*.006);ctx.stroke();
+      }
+      ctx.globalAlpha=1;
+    });
+  }
+
+  function forgeCoinEdgeTexture(THREE){
+    const canvas=document.createElement('canvas');canvas.width=512;canvas.height=72;const ctx=canvas.getContext('2d');
+    const g=ctx.createLinearGradient(0,0,0,72);g.addColorStop(0,'#c5a755');g.addColorStop(.24,'#6f592a');g.addColorStop(.52,'#2f2718');g.addColorStop(.75,'#9a7c38');g.addColorStop(1,'#4a3b21');ctx.fillStyle=g;ctx.fillRect(0,0,512,72);
+    for(let x=0;x<512;x+=7){ctx.fillStyle='rgba(25,21,13,.72)';ctx.fillRect(x,0,2,72);ctx.fillStyle='rgba(224,193,102,.35)';ctx.fillRect(x+2,0,1,72);}
+    const tex=new THREE.CanvasTexture(canvas);tex.wrapS=THREE.RepeatWrapping;tex.colorSpace=THREE.SRGBColorSpace;tex.needsUpdate=true;return tex;
+  }
+
+  const forgeBaseReal3dRollDie=real3dRollDie;
+  real3dRollDie=async function(sides){
+    sides=sides===6?6:20;
+    if(sides===6)return forgeBaseReal3dRollDie(6);
+    const result=1+Math.floor(Math.random()*20);
+    real3dCancel();luckShowModal('3D DICE ROLL','Rolling D20');$('#random-result').textContent='Rolling d20…';$('#luck-sub').textContent='Tumbling across the table…';
+    const host=real3dStage('Building numbered D20…');const token=++real3dRunToken;
+    try{
+      const THREE=await real3dLoadThree();if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+      host.parentElement.querySelector('.real3d-loading')?.remove();const env=real3dRenderer(THREE,host);env.camera.position.set(0,0,6.5);
+      const group=new THREE.Group();env.scene.add(group);
+      const geometry=new THREE.IcosahedronGeometry(1.58,0).toNonIndexed();
+      const base=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0x26322f,roughness:.30,metalness:.5,flatShading:true}));base.castShadow=true;group.add(base);
+      const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geometry,1),new THREE.LineBasicMaterial({color:0x8b6d38,transparent:true,opacity:.72}));group.add(edges);
+      const pos=geometry.attributes.position,faceNormals=[];
+      for(let i=0;i<20;i++){
+        const a=new THREE.Vector3().fromBufferAttribute(pos,i*3),b=new THREE.Vector3().fromBufferAttribute(pos,i*3+1),c=new THREE.Vector3().fromBufferAttribute(pos,i*3+2);
+        const normal=a.clone().add(b).add(c).multiplyScalar(1/3).normalize();faceNormals.push(normal);
+        group.add(forgeD20FaceDecal(THREE,a,b,c,i+1,normal));
+      }
+      const q=new THREE.Quaternion().setFromUnitVectors(faceNormals[result-1],new THREE.Vector3(0,0,1));const finalEuler=new THREE.Euler().setFromQuaternion(q,'XYZ');
+      const sx=-.35,sy=.25,sz=-.18,endX=finalEuler.x+Math.PI*6,endY=finalEuler.y+Math.PI*8,endZ=finalEuler.z+Math.PI*4;
+      const start=performance.now(),duration=1780,reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      function frame(now){
+        if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+        const raw=reduced?1:Math.min(1,(now-start)/duration),e=real3dEase(raw);
+        group.rotation.set(sx+(endX-sx)*e,sy+(endY-sy)*e,sz+(endZ-sz)*e);group.position.x=-1.25*(1-e);group.position.y=Math.abs(Math.sin(raw*Math.PI*3.15))*.78*(1-raw)-.03;
+        const sc=1+Math.sin(raw*Math.PI*5)*.035*(1-raw);group.scale.setScalar(sc);env.renderer.render(env.scene,env.camera);
+        if(raw<1)real3dRaf=requestAnimationFrame(frame);else{
+          real3dRaf=null;group.rotation.copy(finalEuler);group.position.set(0,0,0);group.scale.setScalar(1);env.renderer.render(env.scene,env.camera);
+          $('#luck-result').textContent=`D20: ${result}`;$('#luck-sub').textContent=result===20?'Natural 20!':'The numbered face landed on the result.';$('#random-result').textContent=`d20: ${result}`;logEvent(`Rolled d20: ${result}.`);luckSparks();luckAction('Roll D20 again','btn primary',()=>real3dRollDie(20));luckAction('Other die','btn ghost',()=>{luckClose();luckShowDicePicker();});
+        }
+      }
+      real3dRaf=requestAnimationFrame(frame);
+    }catch(err){console.error('Numbered D20 renderer failed:',err);luckShowModal('3D DICE','3D renderer could not load');$('#luck-stage').innerHTML='<div class="qol-rule-box"><strong>The true 3D D20 could not load.</strong><br><br>Refresh and try again.</div>';$('#luck-sub').textContent='No roll was made.';luckAction('Close','btn primary',luckClose);}
+  };
+
+  real3dFlipQuarter=async function(){
+    const result=Math.random()<.5?'Heads':'Tails';
+    real3dCancel();luckShowModal('COIN FLIP','Flipping Forge coin');$('#random-result').textContent='Flipping coin…';$('#luck-sub').textContent='The brass medallion is in the air…';
+    const host=real3dStage('Forging coin…');const token=++real3dRunToken;
+    try{
+      const THREE=await real3dLoadThree();if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+      host.parentElement.querySelector('.real3d-loading')?.remove();const env=real3dRenderer(THREE,host);env.camera.position.set(0,0,6.7);
+      const heads=forgeCoinTexture(THREE,'heads'),tails=forgeCoinTexture(THREE,'tails'),edge=forgeCoinEdgeTexture(THREE);
+      const mats=[new THREE.MeshStandardMaterial({map:edge,metalness:.78,roughness:.24}),new THREE.MeshStandardMaterial({map:heads,metalness:.58,roughness:.30}),new THREE.MeshStandardMaterial({map:tails,metalness:.58,roughness:.30})];
+      const coin=new THREE.Mesh(new THREE.CylinderGeometry(1.48,1.48,.22,96,1,false),mats);coin.castShadow=true;env.scene.add(coin);
+      const base=Math.PI/2,flips=result==='Heads'?10:11,endX=base+flips*Math.PI,startX=base-.15,start=performance.now(),duration=1900,reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      function frame(now){
+        if(token!==real3dRunToken||$('#luck-modal').hidden)return;
+        const raw=reduced?1:Math.min(1,(now-start)/duration),e=real3dEase(raw);
+        coin.rotation.x=startX+(endX-startX)*e;coin.rotation.y=Math.sin(raw*Math.PI*4)*.38*(1-raw);coin.rotation.z=Math.sin(raw*Math.PI*3)*.16*(1-raw);coin.position.x=-.9*(1-e);coin.position.y=Math.sin(raw*Math.PI)*1.58+Math.abs(Math.sin(raw*Math.PI*4))*.25*(1-raw);env.renderer.render(env.scene,env.camera);
+        if(raw<1)real3dRaf=requestAnimationFrame(frame);else{
+          real3dRaf=null;coin.rotation.set(result==='Heads'?base:base+Math.PI,0,0);coin.position.set(0,0,0);env.renderer.render(env.scene,env.camera);
+          $('#luck-result').textContent=result.toUpperCase();$('#luck-sub').innerHTML=`The Forge coin landed <strong>${result}</strong>.<div class="real3d-quarter-note">Antique brass fantasy medallion with engraved faces and a ridged edge.</div>`;$('#random-result').textContent=result;logEvent(`Flipped a coin: ${result}.`);luckSparks();luckAction('Flip again','btn primary',real3dFlipQuarter);
+        }
+      }
+      real3dRaf=requestAnimationFrame(frame);
+    }catch(err){console.error('Forge coin renderer failed:',err);luckShowModal('3D COIN','3D renderer could not load');$('#luck-stage').innerHTML='<div class="qol-rule-box"><strong>The true 3D Forge coin could not load.</strong><br><br>Refresh and try again.</div>';$('#luck-sub').textContent='No flip was made.';luckAction('Close','btn primary',luckClose);}
+  };
+
+  luckRollDie=function(sides){return real3dRollDie(sides);};
+  luckFlipCoin=function(){return real3dFlipQuarter();};
