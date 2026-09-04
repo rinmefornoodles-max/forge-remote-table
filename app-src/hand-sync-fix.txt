@@ -1,0 +1,37 @@
+
+
+  // Final hand/state synchronization guard.
+  // The stable-hand optimization must never preserve stale DOM when the actual
+  // contents of state.zones.hand changed (for example, playing a card).
+  (() => {
+    function forgeHandDomIds() {
+      const hand = $('#hand');
+      if (!hand) return [];
+      return [...hand.querySelectorAll(':scope > .remote-card')]
+        .map(el => el.dataset.cardId)
+        .filter(Boolean);
+    }
+
+    function forgeSameIds(a,b) {
+      return a.length === b.length && a.every((id,index) => id === b[index]);
+    }
+
+    function forgeRebuildHandFromState() {
+      const hand = $('#hand');
+      if (!hand || !state?.started) return;
+      hand.innerHTML = '';
+      for (const id of state.zones.hand) {
+        if (card(id)) hand.appendChild(makeCardElement(id,'hand'));
+      }
+      $('#hand-count').textContent = `${state.zones.hand.length} card${state.zones.hand.length===1?'':'s'}`;
+      requestAnimationFrame(() => forgeLayoutHand());
+    }
+
+    const forgeHandSyncBaseRender = render;
+    render = function() {
+      forgeHandSyncBaseRender();
+      const shown = forgeHandDomIds();
+      const actual = [...state.zones.hand];
+      if (!forgeSameIds(shown,actual)) forgeRebuildHandFromState();
+    };
+  })();
