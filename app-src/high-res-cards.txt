@@ -242,28 +242,38 @@
     }, true);
   })();
 
-  // Progressive stack browsing.
-  // Hovering through a stack peels each card downward in sequence so the cards
-  // underneath can be inspected. This is visual-only and never changes state.
+  // Smooth progressive stack browsing.
+  // A stack opens like a restrained accordion. The top card peels first; when
+  // the pointer settles over the next revealed card, the fan opens one layer
+  // farther. Positions are visual-only and collapse smoothly back to state.
   (() => {
-    const PEEL_STEP = 108;
+    const MIN_STEP = 30;
+    const MAX_STEP = 46;
+    const TARGET_SPREAD = 185;
+    const NEXT_CARD_DWELL = 95;
+    const COLLAPSE_MS = 220;
+
     let activeAnchorId = null;
-    let peeledIds = [];
-    let lastPeelAt = 0;
+    let peelDepth = 0;
+    let pendingId = null;
+    let pendingTimer = null;
+    let collapseToken = 0;
 
     if (!document.getElementById('forge-stack-peel-style')) {
       const style = document.createElement('style');
       style.id = 'forge-stack-peel-style';
       style.textContent = `
         #battlefield .remote-card.forge-stack-browse-card {
-          transition:top .16s cubic-bezier(.2,.75,.25,1),filter .12s,box-shadow .12s!important;
+          transition:top .22s cubic-bezier(.22,.78,.22,1),filter .16s ease,box-shadow .16s ease!important;
           will-change:top;
         }
         #battlefield .remote-card.forge-stack-browse-card:hover {
-          z-index:auto!important;
+          z-index:500!important;
+          filter:brightness(1.06);
+          box-shadow:0 12px 28px rgba(0,0,0,.5),0 0 0 2px rgba(208,164,95,.38);
         }
         #battlefield .remote-card.forge-stack-peeled {
-          filter:brightness(1.055);
+          filter:brightness(1.035);
         }
         @media (prefers-reduced-motion:reduce) {
           #battlefield .remote-card.forge-stack-browse-card { transition:none!important; }
@@ -287,39 +297,62 @@
       return document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(id)}"]`);
     }
 
-    function clearPeel() {
-      if (activeAnchorId) {
-        for (const id of stackMembersFor(activeAnchorId)) {
-          const c = card(id);
-          const node = nodeFor(id);
-          if (!node) continue;
-          node.classList.remove('forge-stack-browse-card','forge-stack-peeled');
-          if (c) node.style.top = `${Number(c.y) || 0}px`;
-        }
-      }
-      activeAnchorId = null;
-      peeledIds = [];
-      lastPeelAt = 0;
+    function stepFor(ids) {
+      const gaps = Math.max(1, ids.length - 1);
+      return Math.max(MIN_STEP, Math.min(MAX_STEP, TARGET_SPREAD / gaps));
+    }
+
+    function cancelPending() {
+      if (pendingTimer) clearTimeout(pendingTimer);
+      pendingTimer = null;
+      pendingId = null;
     }
 
     function applyPeel() {
       if (!activeAnchorId) return;
       const ids = stackMembersFor(activeAnchorId);
-      if (ids.length < 2) return clearPeel();
+      if (ids.length < 2) return collapsePeel();
 
-      const peeled = new Set(peeledIds);
-      const orderedPeeled = ids.filter(id => peeled.has(id));
-      const rank = new Map(orderedPeeled.map((id,index) => [id,index + 1]));
-
+      const topDown = [...ids].reverse();
+      const step = stepFor(ids);
       ids.forEach(id => {
         const c = card(id);
         const node = nodeFor(id);
         if (!c || !node) return;
         node.classList.add('forge-stack-browse-card');
-        const peelRank = rank.get(id) || 0;
-        node.classList.toggle('forge-stack-peeled', peelRank > 0);
-        node.style.top = `${(Number(c.y) || 0) + peelRank * PEEL_STEP}px`;
+        const topIndex = topDown.indexOf(id);
+        const layer = topIndex >= 0 && topIndex < peelDepth ? peelDepth - topIndex : 0;
+        node.classList.toggle('forge-stack-peeled', layer > 0);
+        node.style.top = `${(Number(c.y) || 0) + layer * step}px`;
       });
+    }
+
+    function collapsePeel(immediate=false) {
+      cancelPending();
+      if (!activeAnchorId) return;
+
+      const oldAnchor = activeAnchorId;
+      const ids = stackMembersFor(oldAnchor);
+      const token = ++collapseToken;
+      activeAnchorId = null;
+      peelDepth = 0;
+
+      ids.forEach(id => {
+        const c = card(id);
+        const node = nodeFor(id);
+        if (!node) return;
+        node.classList.add('forge-stack-browse-card');
+        node.classList.remove('forge-stack-peeled');
+        if (c) node.style.top = `${Number(c.y) || 0}px`;
+      });
+
+      const cleanup = () => {
+        if (token !== collapseToken || activeAnchorId) return;
+        ids.forEach(id => nodeFor(id)?.classList.remove('forge-stack-browse-card','forge-stack-peeled'));
+      };
+
+      if (immediate) cleanup();
+      else setTimeout(cleanup, COLLAPSE_MS + 30);
     }
 
     function stackCardAt(x,y) {
@@ -344,50 +377,73 @@
         .map(id => nodeFor(id)?.getBoundingClientRect())
         .filter(Boolean);
       if (!rects.length) return false;
-      const left = Math.min(...rects.map(r => r.left)) - 12;
-      const right = Math.max(...rects.map(r => r.right)) + 12;
-      const top = Math.min(...rects.map(r => r.top)) - 12;
-      const bottom = Math.max(...rects.map(r => r.bottom)) + 12;
+      const left = Math.min(...rects.map(r => r.left)) - 18;
+      const right = Math.max(...rects.map(r => r.right)) + 18;
+      const top = Math.min(...rects.map(r => r.top)) - 18;
+      const bottom = Math.max(...rects.map(r => r.bottom)) + 18;
       return x >= left && x <= right && y >= top && y <= bottom;
+    }
+
+    function queueNextLayer(info) {
+      if (!activeAnchorId || info.anchorId !== activeAnchorId) return;
+      const ids = stackMembersFor(activeAnchorId);
+      const topDown = [...ids].reverse();
+      const targetDepth = topDown.indexOf(info.id) + 1;
+      if (targetDepth <= peelDepth || targetDepth < 1) {
+        cancelPending();
+        return;
+      }
+      if (pendingId === info.id) return;
+
+      cancelPending();
+      pendingId = info.id;
+      pendingTimer = setTimeout(() => {
+        if (!activeAnchorId || pendingId !== info.id) return;
+        const currentIds = stackMembersFor(activeAnchorId);
+        const currentTopDown = [...currentIds].reverse();
+        const currentDepth = currentTopDown.indexOf(info.id) + 1;
+        if (currentDepth > peelDepth) {
+          peelDepth = currentDepth;
+          applyPeel();
+        }
+        pendingTimer = null;
+        pendingId = null;
+      }, NEXT_CARD_DWELL);
     }
 
     document.addEventListener('pointermove', event => {
       if (event.pointerType === 'touch') return;
       if (draggedId || document.body.classList.contains('qol-drag-mode')) {
-        clearPeel();
+        collapsePeel(true);
         return;
       }
 
       const info = stackCardAt(event.clientX,event.clientY);
       if (!info) {
-        if (!pointInsideActiveStack(event.clientX,event.clientY)) clearPeel();
+        cancelPending();
+        if (!pointInsideActiveStack(event.clientX,event.clientY)) collapsePeel();
         return;
       }
 
       if (activeAnchorId !== info.anchorId) {
-        clearPeel();
+        collapsePeel(true);
+        collapseToken++;
         activeAnchorId = info.anchorId;
-        peeledIds = [info.id];
-        lastPeelAt = performance.now();
+        peelDepth = 1;
         applyPeel();
         return;
       }
 
-      if (!peeledIds.includes(info.id) && performance.now() - lastPeelAt > 45) {
-        peeledIds.push(info.id);
-        lastPeelAt = performance.now();
-      }
-      applyPeel();
+      queueNextLayer(info);
     }, true);
 
-    // Collapse before any real interaction so dragging always starts from the
-    // canonical saved card positions, not the temporary browse positions.
-    document.addEventListener('pointerdown', () => clearPeel(), true);
-    document.addEventListener('contextmenu', () => clearPeel(), true);
-    window.addEventListener('blur', clearPeel);
+    // Real interactions use canonical card coordinates, never temporary browse positions.
+    document.addEventListener('pointerdown', () => collapsePeel(true), true);
+    document.addEventListener('contextmenu', () => collapsePeel(true), true);
+    window.addEventListener('blur', () => collapsePeel(true));
 
     const battlefield = document.getElementById('battlefield');
     battlefield?.addEventListener('pointerleave', event => {
-      if (!event.buttons) clearPeel();
+      if (!event.buttons) collapsePeel();
     });
   })();
