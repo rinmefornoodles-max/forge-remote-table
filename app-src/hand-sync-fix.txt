@@ -1,8 +1,8 @@
 
 
   // Final hand/state synchronization guard.
-  // The stable-hand optimization must never preserve stale DOM when the actual
-  // contents of state.zones.hand changed (for example, playing a card).
+  // The visual hand must always match state.zones.hand, but unrelated table
+  // renders should leave the existing hand DOM alone so the fan does not wiggle.
   (() => {
     function forgeHandDomIds() {
       const hand = $('#hand');
@@ -27,11 +27,84 @@
       requestAnimationFrame(() => forgeLayoutHand());
     }
 
-    const forgeHandSyncBaseRender = render;
-    render = function() {
-      forgeHandSyncBaseRender();
+    function forgeEnsureHandMatchesState() {
+      if (!state?.started) return;
       const shown = forgeHandDomIds();
       const actual = [...state.zones.hand];
       if (!forgeSameIds(shown,actual)) forgeRebuildHandFromState();
+    }
+
+    const forgeHandSyncBaseRender = render;
+    render = function() {
+      forgeHandSyncBaseRender();
+      forgeEnsureHandMatchesState();
     };
+
+    // Post-drop safety net. Pointer-capture can make a hand card's pointerup
+    // event target remain the hand card even while the pointer is physically over
+    // the battlefield. After the normal drag handler finishes, verify the zone
+    // using pointer coordinates and repair both state and DOM if necessary.
+    let handDrag = null;
+
+    document.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      const el = e.target.closest?.('#hand > .remote-card');
+      const id = el?.dataset.cardId;
+      if (!id || zoneOf(id) !== 'hand') return;
+      const rect = el.getBoundingClientRect();
+      const w = Math.max(1,rect.width), h = Math.max(1,rect.height);
+      handDrag = {
+        pointerId:e.pointerId,
+        id,
+        startX:e.clientX,
+        startY:e.clientY,
+        moved:false,
+        ratioX:Math.max(0,Math.min(1,(e.clientX-rect.left)/w)),
+        ratioY:Math.max(0,Math.min(1,(e.clientY-rect.top)/h))
+      };
+    }, true);
+
+    document.addEventListener('pointermove', e => {
+      if (!handDrag || handDrag.pointerId !== e.pointerId) return;
+      if (Math.hypot(e.clientX-handDrag.startX,e.clientY-handDrag.startY) >= 7) handDrag.moved = true;
+    }, true);
+
+    document.addEventListener('pointerup', e => {
+      if (!handDrag || handDrag.pointerId !== e.pointerId) return;
+      const drag = handDrag;
+      handDrag = null;
+      if (!drag.moved) return;
+
+      const clientX = e.clientX, clientY = e.clientY;
+      setTimeout(() => {
+        const bf = $('#battlefield');
+        if (!bf || !card(drag.id)) return;
+        const rect = bf.getBoundingClientRect();
+        const overBattlefield = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+        if (!overBattlefield) return;
+
+        // If the normal drag path did not complete the state move, complete it.
+        if (zoneOf(drag.id) === 'hand') {
+          const size = qolBattlefieldCardSize();
+          const x = Math.max(0,clientX - rect.left - drag.ratioX * size.width + bf.scrollLeft);
+          const y = Math.max(0,clientY - rect.top - drag.ratioY * size.height + bf.scrollTop);
+          moveCard(drag.id,'battlefield',{x,y,checkpoint:false});
+        }
+
+        // And regardless of which render wrapper ran, never leave a stale copy
+        // visibly sitting in the hand once the card's real zone is battlefield.
+        if (zoneOf(drag.id) === 'battlefield') {
+          const stale = $('#hand')?.querySelector(`:scope > .remote-card[data-card-id="${CSS.escape(drag.id)}"]`);
+          stale?.remove();
+          $('#hand-count').textContent = `${state.zones.hand.length} card${state.zones.hand.length===1?'':'s'}`;
+          forgeEnsureHandMatchesState();
+          requestAnimationFrame(() => forgeLayoutHand());
+          scheduleSave();
+        }
+      },0);
+    }, true);
+
+    document.addEventListener('pointercancel', e => {
+      if (handDrag?.pointerId === e.pointerId) handDrag = null;
+    }, true);
   })();
