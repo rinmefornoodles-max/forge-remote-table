@@ -8,6 +8,7 @@
     './app-src/part-03.txt',
     './app-src/qol-internal.txt',
     './app-src/qol-fixes.txt',
+    './app-src/interaction-animations.txt',
     './app-src/part-04.txt'
   ];
 
