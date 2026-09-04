@@ -1,6 +1,18 @@
 
 
-  // Retired compatibility shim.
-  // The authoritative D20 face-number and Forge medallion renderer now lives in
-  // three-loader-fix.txt so both older and newer cached app.js loaders use the
-  // same implementation. Intentionally no overrides here.
+  // Compatibility/style shim loaded late in the bundle.
+  // Keep Arena-style hand cards above the hand header when they lift on hover.
+  (() => {
+    if (document.getElementById('forge-hand-layer-fix')) return;
+    const style = document.createElement('style');
+    style.id = 'forge-hand-layer-fix';
+    style.textContent = `
+      .hand-shell{overflow:visible!important}
+      .hand-heading{position:relative!important;z-index:1!important}
+      .hand{position:relative!important;z-index:10!important;overflow:visible!important;isolation:auto!important}
+      .hand .remote-card{position:relative}
+      .hand .remote-card.forge-hand-focus{z-index:1000!important}
+      .hand .remote-card.qol-dragging-card{z-index:1100!important}
+    `;
+    document.head.appendChild(style);
+  })();
