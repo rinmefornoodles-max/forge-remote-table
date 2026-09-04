@@ -12,6 +12,7 @@
     './app-src/randomizer-3d.txt',
     './app-src/three-loader-fix.txt',
     './app-src/randomizer-face-art.txt',
+    './app-src/tabletop-polish.txt',
     './app-src/part-04.txt'
   ];
 
