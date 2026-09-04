@@ -176,3 +176,68 @@
       if (Date.now() >= qolSuppressCardClicksUntil && zoneOf(id) === 'battlefield') toggleTapped(id);
     },true);
   };
+
+  // Counter cleanup. A selected card can be reset from its right-click menu,
+  // and cards entering the graveyard automatically lose counters/P-T markers.
+  function qolCardHasCountersOrPt(c) {
+    if (!c) return false;
+    const hasCounters = Object.values(c.counters || {}).some(v => Number(v) !== 0);
+    const hasPt = Number(c.ptBoost?.power || 0) !== 0 || Number(c.ptBoost?.toughness || 0) !== 0;
+    return hasCounters || hasPt;
+  }
+
+  function qolClearCardCounters(c) {
+    if (!c) return;
+    c.counters = {};
+    delete c.ptBoost;
+  }
+
+  const qolCounterBaseMoveCard = moveCard;
+  moveCard = function(id,targetZone,opts={}) {
+    const c = card(id);
+    if (targetZone === 'graveyard' && c) {
+      // Preserve Undo: checkpoint before changing the counters unless the caller
+      // already made a drag/action checkpoint and explicitly disabled another one.
+      if (opts.checkpoint !== false) {
+        checkpoint();
+        qolClearCardCounters(c);
+        return qolCounterBaseMoveCard(id,targetZone,{...opts,checkpoint:false});
+      }
+      qolClearCardCounters(c);
+    }
+    return qolCounterBaseMoveCard(id,targetZone,opts);
+  };
+
+  const qolCounterBaseOpenInspector = openInspector;
+  openInspector = function(id) {
+    qolCounterBaseOpenInspector(id);
+    const c = card(id);
+    if (!c) return;
+    const grids = $$('#inspector-content .action-grid');
+    const grid = grids[grids.length - 1];
+    if (grid && !grid.querySelector('[data-inspector-action="clearcounters"]')) {
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.dataset.inspectorAction = 'clearcounters';
+      clear.textContent = 'Clear counters / P-T';
+      clear.disabled = !qolCardHasCountersOrPt(c);
+      clear.title = clear.disabled ? 'This card has no counters or P/T modifier.' : 'Remove counters and P/T modifiers from this card only.';
+      grid.appendChild(clear);
+    }
+  };
+
+  const qolCounterBaseInspectorAction = inspectorAction;
+  inspectorAction = function(action) {
+    if (action === 'clearcounters') {
+      const c = card(selectedId);
+      if (!c || !qolCardHasCountersOrPt(c)) return;
+      checkpoint();
+      qolClearCardCounters(c);
+      logEvent(`${c.name}: cleared counters and P/T modifiers.`);
+      render();
+      scheduleSave();
+      if (selectedId && card(selectedId)) openInspector(selectedId);
+      return;
+    }
+    return qolCounterBaseInspectorAction(action);
+  };
