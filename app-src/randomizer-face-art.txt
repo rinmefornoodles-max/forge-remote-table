@@ -1,8 +1,9 @@
 
 
   // Compatibility/style shim loaded late in the bundle.
-  // Keep Arena-style hand cards above the controls and remove the full-width
-  // horizontal bars that visually cut through raised cards.
+  // Keep Arena-style hand cards above the controls, remove the full-width
+  // horizontal bars, and give lifted cards a stable hover bridge so moving the
+  // pointer near their lower edge cannot make them rapidly pop in/out.
   (() => {
     if (document.getElementById('forge-hand-layer-fix')) return;
     const style = document.createElement('style');
@@ -25,7 +26,20 @@
       .hand{position:relative!important;z-index:10!important;overflow:visible!important;isolation:auto!important}
       .hand .remote-card{position:relative}
       .hand .remote-card.forge-hand-focus{z-index:1000!important}
+      .hand .remote-card.forge-hand-focus::after{
+        content:"";
+        position:absolute;
+        left:-8px;
+        right:-8px;
+        top:88%;
+        height:108px;
+        background:transparent;
+        pointer-events:auto;
+      }
       .hand .remote-card.qol-dragging-card{z-index:1100!important}
+      .hand .remote-card.qol-dragging-card::after{display:none!important}
+      @media(max-width:980px){.hand .remote-card.forge-hand-focus::after{height:92px}}
+      @media(max-width:720px){.hand .remote-card.forge-hand-focus::after{height:78px}}
     `;
     document.head.appendChild(style);
   })();
