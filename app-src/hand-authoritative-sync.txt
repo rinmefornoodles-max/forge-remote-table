@@ -1,0 +1,80 @@
+
+
+  // Authoritative hand render boundary.
+  // The earlier stable-hand layer intentionally preserves the hand DOM to prevent
+  // unrelated battlefield actions from making the fan wiggle. Its old comparison
+  // can preserve stale nodes after the hand state changes, though. This outermost
+  // wrapper decides whether preservation is allowed BEFORE the wrapped render runs.
+  (() => {
+    function forgeAuthoritativeHandSignature() {
+      if (!state?.started) return '';
+      return state.zones.hand.map(id => {
+        const c = card(id);
+        if (!c) return id;
+        return [
+          id,
+          c.faceDown ? 1 : 0,
+          Number(c.faceIndex) || 0,
+          JSON.stringify(c.counters || {}),
+          JSON.stringify(c.ptBoost || {}),
+          Number(c.stackCount) || 1,
+          c.note || ''
+        ].join(':');
+      }).join('|');
+    }
+
+    function forgeAuthoritativeHandIds() {
+      return state?.started ? [...state.zones.hand] : [];
+    }
+
+    function forgeVisibleHandIds() {
+      const hand = $('#hand');
+      if (!hand) return [];
+      return [...hand.querySelectorAll(':scope > .remote-card')]
+        .map(el => el.dataset.cardId)
+        .filter(Boolean);
+    }
+
+    function forgeSameHandIds(a,b) {
+      return a.length === b.length && a.every((id,i) => id === b[i]);
+    }
+
+    function forgeBuildHandExactlyFromState() {
+      const hand = $('#hand');
+      if (!hand || !state?.started) return;
+      hand.replaceChildren();
+      for (const id of state.zones.hand) {
+        if (card(id)) hand.appendChild(makeCardElement(id,'hand'));
+      }
+      const count = state.zones.hand.length;
+      const countEl = $('#hand-count');
+      if (countEl) countEl.textContent = `${count} card${count===1?'':'s'}`;
+      requestAnimationFrame(() => forgeLayoutHand());
+    }
+
+    let forgeLastAuthoritativeHandSignature = forgeAuthoritativeHandSignature();
+    const forgeAuthoritativeBaseRender = render;
+
+    render = function() {
+      const nextSignature = forgeAuthoritativeHandSignature();
+      const handChanged = nextSignature !== forgeLastAuthoritativeHandSignature;
+
+      // Critical fix: if the real hand changed, clear the old hand DOM BEFORE
+      // entering the older preservation wrapper. With no old nodes available,
+      // that wrapper cannot restore a stale hand after the core render rebuilds it.
+      if (handChanged) {
+        const hand = $('#hand');
+        if (hand) hand.replaceChildren();
+      }
+
+      forgeAuthoritativeBaseRender();
+
+      // Final invariant: the live hand must contain exactly the cards in state,
+      // in the same order. This covers draws, plays, returns, sort and mulligans.
+      const actual = forgeAuthoritativeHandIds();
+      const visible = forgeVisibleHandIds();
+      if (!forgeSameHandIds(visible,actual)) forgeBuildHandExactlyFromState();
+
+      forgeLastAuthoritativeHandSignature = forgeAuthoritativeHandSignature();
+    };
+  })();
