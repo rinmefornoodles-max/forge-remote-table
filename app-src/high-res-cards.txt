@@ -241,3 +241,153 @@
       if (forgeUniversalStackDrag && event.pointerId === forgeUniversalStackDrag.pointerId) forgeUniversalStackDrag = null;
     }, true);
   })();
+
+  // Progressive stack browsing.
+  // Hovering through a stack peels each card downward in sequence so the cards
+  // underneath can be inspected. This is visual-only and never changes state.
+  (() => {
+    const PEEL_STEP = 108;
+    let activeAnchorId = null;
+    let peeledIds = [];
+    let lastPeelAt = 0;
+
+    if (!document.getElementById('forge-stack-peel-style')) {
+      const style = document.createElement('style');
+      style.id = 'forge-stack-peel-style';
+      style.textContent = `
+        #battlefield .remote-card.forge-stack-browse-card {
+          transition:top .16s cubic-bezier(.2,.75,.25,1),filter .12s,box-shadow .12s!important;
+          will-change:top;
+        }
+        #battlefield .remote-card.forge-stack-browse-card:hover {
+          z-index:auto!important;
+        }
+        #battlefield .remote-card.forge-stack-peeled {
+          filter:brightness(1.055);
+        }
+        @media (prefers-reduced-motion:reduce) {
+          #battlefield .remote-card.forge-stack-browse-card { transition:none!important; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    function stackAnchorFor(id) {
+      const c = card(id);
+      if (!c || zoneOf(id) !== 'battlefield') return null;
+      return c.autoStackAnchor && card(c.autoStackAnchor) ? c.autoStackAnchor : id;
+    }
+
+    function stackMembersFor(anchorId) {
+      if (!anchorId) return [];
+      return state.zones.battlefield.filter(id => id === anchorId || card(id)?.autoStackAnchor === anchorId);
+    }
+
+    function nodeFor(id) {
+      return document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(id)}"]`);
+    }
+
+    function clearPeel() {
+      if (activeAnchorId) {
+        for (const id of stackMembersFor(activeAnchorId)) {
+          const c = card(id);
+          const node = nodeFor(id);
+          if (!node) continue;
+          node.classList.remove('forge-stack-browse-card','forge-stack-peeled');
+          if (c) node.style.top = `${Number(c.y) || 0}px`;
+        }
+      }
+      activeAnchorId = null;
+      peeledIds = [];
+      lastPeelAt = 0;
+    }
+
+    function applyPeel() {
+      if (!activeAnchorId) return;
+      const ids = stackMembersFor(activeAnchorId);
+      if (ids.length < 2) return clearPeel();
+
+      const peeled = new Set(peeledIds);
+      const orderedPeeled = ids.filter(id => peeled.has(id));
+      const rank = new Map(orderedPeeled.map((id,index) => [id,index + 1]));
+
+      ids.forEach(id => {
+        const c = card(id);
+        const node = nodeFor(id);
+        if (!c || !node) return;
+        node.classList.add('forge-stack-browse-card');
+        const peelRank = rank.get(id) || 0;
+        node.classList.toggle('forge-stack-peeled', peelRank > 0);
+        node.style.top = `${(Number(c.y) || 0) + peelRank * PEEL_STEP}px`;
+      });
+    }
+
+    function stackCardAt(x,y) {
+      const seen = new Set();
+      for (const hit of document.elementsFromPoint(x,y)) {
+        const el = hit.closest?.('#battlefield .remote-card');
+        if (!el || seen.has(el)) continue;
+        seen.add(el);
+        const id = el.dataset.cardId;
+        if (!id || zoneOf(id) !== 'battlefield') continue;
+        const anchorId = stackAnchorFor(id);
+        const members = stackMembersFor(anchorId);
+        if (members.length < 2) continue;
+        return { id, anchorId, members };
+      }
+      return null;
+    }
+
+    function pointInsideActiveStack(x,y) {
+      if (!activeAnchorId) return false;
+      const rects = stackMembersFor(activeAnchorId)
+        .map(id => nodeFor(id)?.getBoundingClientRect())
+        .filter(Boolean);
+      if (!rects.length) return false;
+      const left = Math.min(...rects.map(r => r.left)) - 12;
+      const right = Math.max(...rects.map(r => r.right)) + 12;
+      const top = Math.min(...rects.map(r => r.top)) - 12;
+      const bottom = Math.max(...rects.map(r => r.bottom)) + 12;
+      return x >= left && x <= right && y >= top && y <= bottom;
+    }
+
+    document.addEventListener('pointermove', event => {
+      if (event.pointerType === 'touch') return;
+      if (draggedId || document.body.classList.contains('qol-drag-mode')) {
+        clearPeel();
+        return;
+      }
+
+      const info = stackCardAt(event.clientX,event.clientY);
+      if (!info) {
+        if (!pointInsideActiveStack(event.clientX,event.clientY)) clearPeel();
+        return;
+      }
+
+      if (activeAnchorId !== info.anchorId) {
+        clearPeel();
+        activeAnchorId = info.anchorId;
+        peeledIds = [info.id];
+        lastPeelAt = performance.now();
+        applyPeel();
+        return;
+      }
+
+      if (!peeledIds.includes(info.id) && performance.now() - lastPeelAt > 45) {
+        peeledIds.push(info.id);
+        lastPeelAt = performance.now();
+      }
+      applyPeel();
+    }, true);
+
+    // Collapse before any real interaction so dragging always starts from the
+    // canonical saved card positions, not the temporary browse positions.
+    document.addEventListener('pointerdown', () => clearPeel(), true);
+    document.addEventListener('contextmenu', () => clearPeel(), true);
+    window.addEventListener('blur', clearPeel);
+
+    const battlefield = document.getElementById('battlefield');
+    battlefield?.addEventListener('pointerleave', event => {
+      if (!event.buttons) clearPeel();
+    });
+  })();
