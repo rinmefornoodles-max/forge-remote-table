@@ -81,11 +81,37 @@
     `;
   })();
 
-  // Universal top/bottom stacking.
-  // Any card may be stacked onto any battlefield card. The half of the target
-  // under the mouse at release decides the exact order.
+  // Universal top/bottom stacking with drag-time insertion preview.
+  // Any card may be stacked onto any battlefield card. While dragging, the
+  // target card slides right to expose the exact insertion point. Release on
+  // the target's top half to insert above it, or bottom half to insert below.
   (() => {
+    const INSERT_SHIFT = 48;
+    const TARGET_HOLD_MS = 90;
     let forgeUniversalStackDrag = null;
+
+    if (!document.getElementById('forge-stack-insert-style')) {
+      const style = document.createElement('style');
+      style.id = 'forge-stack-insert-style';
+      style.textContent = `
+        #battlefield .remote-card.forge-stack-insert-target {
+          transition:left .16s cubic-bezier(.2,.78,.22,1),box-shadow .14s ease,filter .14s ease!important;
+          z-index:520!important;
+          filter:brightness(1.06);
+          will-change:left;
+        }
+        #battlefield .remote-card.forge-stack-insert-above {
+          box-shadow:inset 0 4px 0 #f1c779,0 12px 30px rgba(0,0,0,.5),0 0 0 2px rgba(241,199,121,.42)!important;
+        }
+        #battlefield .remote-card.forge-stack-insert-below {
+          box-shadow:inset 0 -4px 0 #f1c779,0 12px 30px rgba(0,0,0,.5),0 0 0 2px rgba(241,199,121,.42)!important;
+        }
+        @media (prefers-reduced-motion:reduce) {
+          #battlefield .remote-card.forge-stack-insert-target { transition:none!important; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
 
     function forgeStackAnchor(id) {
       const c = card(id);
@@ -94,6 +120,10 @@
 
     function forgeStackMembersAny(anchorId) {
       return state.zones.battlefield.filter(id => id === anchorId || card(id)?.autoStackAnchor === anchorId);
+    }
+
+    function forgeNodeForStack(id) {
+      return document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(id)}"]`);
     }
 
     function forgeReflowAnyStack(anchorId) {
@@ -155,6 +185,37 @@
       return null;
     }
 
+    function forgeClearInsertPreview(drag = forgeUniversalStackDrag) {
+      if (!drag?.previewId) return;
+      const id = drag.previewId;
+      const c = card(id);
+      const node = forgeNodeForStack(id);
+      if (node) {
+        node.classList.remove('forge-stack-insert-target','forge-stack-insert-above','forge-stack-insert-below');
+        if (c) node.style.left = `${Number(c.x) || 0}px`;
+      }
+      drag.previewId = null;
+      drag.previewDirection = null;
+      drag.previewSince = 0;
+    }
+
+    function forgeShowInsertPreview(drag,target,direction) {
+      if (!drag || !target) return;
+      if (drag.previewId && drag.previewId !== target.id) forgeClearInsertPreview(drag);
+
+      const c = card(target.id);
+      const node = target.el || forgeNodeForStack(target.id);
+      if (!c || !node) return;
+
+      if (drag.previewId !== target.id) drag.previewSince = performance.now();
+      drag.previewId = target.id;
+      drag.previewDirection = direction;
+      node.classList.add('forge-stack-insert-target');
+      node.classList.toggle('forge-stack-insert-above', direction === 'above');
+      node.classList.toggle('forge-stack-insert-below', direction === 'below');
+      node.style.left = `${(Number(c.x) || 0) + INSERT_SHIFT}px`;
+    }
+
     function forgeApplyUniversalStack(sourceId,targetId,direction) {
       const source = card(sourceId);
       const target = card(targetId);
@@ -208,7 +269,12 @@
         id,
         startX: event.clientX,
         startY: event.clientY,
-        active: false
+        active: false,
+        previewId: null,
+        previewDirection: null,
+        previewSince: 0,
+        pendingTargetId: null,
+        pendingSince: 0
       };
     }, true);
 
@@ -216,19 +282,64 @@
       const drag = forgeUniversalStackDrag;
       if (!drag || event.pointerId !== drag.pointerId) return;
       if (!drag.active && Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY) >= 7) drag.active = true;
+      if (!drag.active) return;
+
+      const candidate = forgeUniversalTargetAt(event.clientX,event.clientY,drag.id);
+      if (!candidate) {
+        drag.pendingTargetId = null;
+        drag.pendingSince = 0;
+        forgeClearInsertPreview(drag);
+        return;
+      }
+
+      const direction = event.clientY < candidate.rect.top + candidate.rect.height / 2 ? 'above' : 'below';
+
+      if (!drag.previewId || candidate.id === drag.previewId) {
+        drag.pendingTargetId = null;
+        drag.pendingSince = 0;
+        forgeShowInsertPreview(drag,candidate,direction);
+        return;
+      }
+
+      // Moving the current target right exposes the next card underneath. Hold
+      // the current slot briefly so tiny pointer motion cannot cascade through
+      // the whole stack. Settling on another layer intentionally moves the slot.
+      if (drag.pendingTargetId !== candidate.id) {
+        drag.pendingTargetId = candidate.id;
+        drag.pendingSince = performance.now();
+        return;
+      }
+
+      if (performance.now() - drag.pendingSince >= TARGET_HOLD_MS) {
+        drag.pendingTargetId = null;
+        drag.pendingSince = 0;
+        forgeShowInsertPreview(drag,candidate,direction);
+      }
     }, true);
 
     document.addEventListener('pointerup', event => {
       const drag = forgeUniversalStackDrag;
       if (!drag || event.pointerId !== drag.pointerId) return;
       forgeUniversalStackDrag = null;
-      if (!drag.active) return;
+      if (!drag.active) {
+        forgeClearInsertPreview(drag);
+        return;
+      }
 
-      const target = forgeUniversalTargetAt(event.clientX,event.clientY,drag.id);
-      if (!target) return;
-      const direction = event.clientY < target.rect.top + target.rect.height / 2 ? 'above' : 'below';
+      let targetId = drag.previewId;
+      let direction = drag.previewDirection;
+
+      if (!targetId) {
+        const target = forgeUniversalTargetAt(event.clientX,event.clientY,drag.id);
+        if (target) {
+          targetId = target.id;
+          direction = event.clientY < target.rect.top + target.rect.height / 2 ? 'above' : 'below';
+        }
+      }
+
       const sourceId = drag.id;
-      const targetId = target.id;
+      forgeClearInsertPreview(drag);
+      if (!targetId || !direction) return;
 
       // Run after the normal drag/drop and the older duplicate-only helper.
       setTimeout(() => {
@@ -238,7 +349,10 @@
     }, true);
 
     document.addEventListener('pointercancel', event => {
-      if (forgeUniversalStackDrag && event.pointerId === forgeUniversalStackDrag.pointerId) forgeUniversalStackDrag = null;
+      if (!forgeUniversalStackDrag || event.pointerId !== forgeUniversalStackDrag.pointerId) return;
+      const drag = forgeUniversalStackDrag;
+      forgeUniversalStackDrag = null;
+      forgeClearInsertPreview(drag);
     }, true);
   })();
 
