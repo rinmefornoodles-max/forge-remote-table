@@ -12,3 +12,167 @@
     qolBaseExileFromGraveyard(amount);
     if (!$('#zone-modal').hidden && zoneModalZone === 'graveyard') renderZoneModal();
   };
+
+  // Preserve the exact point where a card was grabbed instead of snapping the
+  // card's center under the cursor when it is released on the battlefield.
+  function qolBattlefieldCardSize() {
+    const styles = getComputedStyle(document.documentElement);
+    return {
+      width: parseFloat(styles.getPropertyValue('--card-w')) || 122,
+      height: parseFloat(styles.getPropertyValue('--card-h')) || 170
+    };
+  }
+
+  qolEnablePointerDrag = function(el,id,originZone) {
+    if (!el || !['battlefield','hand','command'].includes(originZone)) return;
+    el.draggable = false;
+    el.style.touchAction = 'none';
+
+    let pointerId = null;
+    let startX = 0, startY = 0, baseX = 0, baseY = 0;
+    let grabOffsetX = 0, grabOffsetY = 0, grabRatioX = .5, grabRatioY = .5;
+    let sourceWidth = 1, sourceHeight = 1;
+    let dragging = false, ghost = null, lastTarget = null;
+
+    const cleanup = () => {
+      draggedId = null;
+      document.body.classList.remove('qol-drag-mode');
+      el.classList.remove('qol-dragging-card');
+      lastTarget?.classList.remove('drag-over');
+      lastTarget = null;
+      ghost?.remove();
+      ghost = null;
+    };
+
+    const positionGhost = (clientX,clientY) => {
+      if (!ghost) return;
+      ghost.style.left = `${clientX - grabOffsetX}px`;
+      ghost.style.top = `${clientY - grabOffsetY}px`;
+    };
+
+    const onMove = e => {
+      if (pointerId !== e.pointerId) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      if (!dragging && Math.hypot(dx,dy) < 7) return;
+
+      if (!dragging) {
+        dragging = true;
+        checkpoint();
+        draggedId = id;
+        document.body.classList.add('qol-drag-mode');
+        el.classList.add('qol-dragging-card');
+
+        if (originZone !== 'battlefield') {
+          ghost = el.cloneNode(true);
+          ghost.className = 'qol-drag-ghost';
+          ghost.removeAttribute('style');
+          ghost.style.width = `${sourceWidth}px`;
+          ghost.style.height = `${sourceHeight}px`;
+          ghost.style.transform = 'none';
+          document.body.appendChild(ghost);
+          positionGhost(e.clientX,e.clientY);
+        }
+      }
+
+      e.preventDefault();
+
+      if (originZone === 'battlefield') {
+        const c = card(id);
+        if (c) {
+          c.x = Math.max(0,baseX + dx);
+          c.y = Math.max(0,baseY + dy);
+          el.style.left = `${c.x}px`;
+          el.style.top = `${c.y}px`;
+        }
+      } else {
+        positionGhost(e.clientX,e.clientY);
+      }
+
+      const target = qolDropTargetAt(e.clientX,e.clientY,el);
+      if (lastTarget !== target) {
+        lastTarget?.classList.remove('drag-over');
+        target?.classList.add('drag-over');
+        lastTarget = target;
+      }
+    };
+
+    const onUp = e => {
+      if (pointerId !== e.pointerId) return;
+      try { el.releasePointerCapture(pointerId); } catch {}
+      if (!dragging) { pointerId = null; return; }
+
+      qolSuppressCardClicksUntil = Date.now() + 420;
+      const target = qolDropTargetAt(e.clientX,e.clientY,el);
+      const targetZone = target?.dataset.dropZone;
+      const origin = zoneOf(id);
+      cleanup();
+      pointerId = null;
+
+      if (targetZone) {
+        if (targetZone === 'battlefield') {
+          if (origin === 'battlefield') {
+            // The card was already moved continuously using its original x/y.
+            // Keep that exact position; do not recenter it beneath the cursor.
+            const c = card(id);
+            if (c) {
+              logEvent(`${c.name}: repositioned on battlefield.`);
+              render();
+              scheduleSave();
+            }
+          } else {
+            const bf = $('#battlefield');
+            const rect = bf.getBoundingClientRect();
+            const boardCard = qolBattlefieldCardSize();
+            const x = Math.max(0,e.clientX - rect.left - grabRatioX * boardCard.width + bf.scrollLeft);
+            const y = Math.max(0,e.clientY - rect.top - grabRatioY * boardCard.height + bf.scrollTop);
+            moveCard(id,'battlefield',{x,y,checkpoint:false});
+          }
+        } else if (targetZone === 'library') {
+          moveCard(id,'library',{placement:'top',checkpoint:false});
+        } else {
+          moveCard(id,targetZone,{checkpoint:false});
+        }
+      } else if (originZone === 'battlefield') {
+        render();
+        scheduleSave();
+      } else {
+        history.pop();
+        render();
+      }
+    };
+
+    el.addEventListener('pointerdown',e => {
+      if (e.button !== 0 || pointerId !== null) return;
+      pointerId = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      const c = card(id);
+      baseX = Number(c?.x) || 0;
+      baseY = Number(c?.y) || 0;
+
+      const rect = el.getBoundingClientRect();
+      sourceWidth = Math.max(1,rect.width);
+      sourceHeight = Math.max(1,rect.height);
+      grabOffsetX = Math.max(0,Math.min(sourceWidth,e.clientX - rect.left));
+      grabOffsetY = Math.max(0,Math.min(sourceHeight,e.clientY - rect.top));
+      grabRatioX = grabOffsetX / sourceWidth;
+      grabRatioY = grabOffsetY / sourceHeight;
+
+      try { el.setPointerCapture(pointerId); } catch {}
+    });
+
+    el.addEventListener('pointermove',onMove);
+    el.addEventListener('pointerup',onUp);
+    el.addEventListener('pointercancel',onUp);
+    el.addEventListener('click',e => {
+      if (Date.now() < qolSuppressCardClicksUntil) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    },true);
+    el.addEventListener('dblclick',e => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (Date.now() >= qolSuppressCardClicksUntil && zoneOf(id) === 'battlefield') toggleTapped(id);
+    },true);
+  };
