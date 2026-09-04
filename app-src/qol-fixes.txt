@@ -111,12 +111,11 @@
       if (targetZone) {
         if (targetZone === 'battlefield') {
           if (origin === 'battlefield') {
-            // The card was already moved continuously using its original x/y.
-            // Keep that exact position; do not recenter it beneath the cursor.
+            // Position was already updated live during the drag. Do NOT render()
+            // here: rebuilding the whole table makes the hand fan animate/wiggle.
             const c = card(id);
             if (c) {
               logEvent(`${c.name}: repositioned on battlefield.`);
-              render();
               scheduleSave();
             }
           } else {
@@ -133,7 +132,8 @@
           moveCard(id,targetZone,{checkpoint:false});
         }
       } else if (originZone === 'battlefield') {
-        render();
+        // Same reason as above: the battlefield element is already exactly where
+        // the pointer left it, so only persist state; leave the hand DOM untouched.
         scheduleSave();
       } else {
         history.pop();
@@ -196,8 +196,6 @@
   moveCard = function(id,targetZone,opts={}) {
     const c = card(id);
     if (targetZone === 'graveyard' && c) {
-      // Preserve Undo: checkpoint before changing the counters unless the caller
-      // already made a drag/action checkpoint and explicitly disabled another one.
       if (opts.checkpoint !== false) {
         checkpoint();
         qolClearCardCounters(c);
