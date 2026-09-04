@@ -241,3 +241,92 @@
     }
     return qolCounterBaseInspectorAction(action);
   };
+
+  // Larger tabletop cards + Arena-style fanned hand. The hand overlap adapts to
+  // card count and viewport width, while hover lifts a card above its neighbors.
+  function forgeInstallCardViewStyle() {
+    if ($('#forge-card-view-style')) return;
+    const style = document.createElement('style');
+    style.id = 'forge-card-view-style';
+    style.textContent = `
+      :root{--card-w:138px;--card-h:192px}
+      .app{padding-bottom:250px}
+      .table-shell{grid-template-columns:166px minmax(0,1fr) 166px;min-height:calc(100vh - 370px)}
+      .zone-preview .remote-card{transform:scale(.54);margin:-38px}
+      .hand-shell{height:240px;overflow:visible;background:linear-gradient(to bottom,rgba(11,17,15,.93),rgba(7,11,10,.985));box-shadow:0 -18px 55px rgba(0,0,0,.55)}
+      .hand-heading{height:38px;position:relative;z-index:5;background:rgba(12,18,16,.94)}
+      .hand{height:202px;display:flex;justify-content:center;align-items:flex-end;gap:0;overflow:visible;padding:4px 26px 5px;perspective:1100px;isolation:isolate}
+      .hand .remote-card{margin-left:var(--hand-overlap,0px);transform:translateY(var(--hand-y,0px)) rotate(var(--hand-angle,0deg));transform-origin:50% 100%;z-index:var(--hand-z,1);transition:transform .17s cubic-bezier(.2,.75,.25,1),margin-left .17s ease,filter .12s,box-shadow .12s;box-shadow:0 8px 20px rgba(0,0,0,.46)}
+      .hand .remote-card:first-child{margin-left:0}
+      .hand .remote-card.forge-hand-focus{transform:translateY(-82px) rotate(0deg) scale(1.23);z-index:250!important;filter:brightness(1.08);box-shadow:0 22px 48px rgba(0,0,0,.72),0 0 0 2px rgba(241,199,121,.75)}
+      .hand .remote-card.forge-hand-left{transform:translateY(var(--hand-y,0px)) rotate(var(--hand-angle,0deg)) translateX(-18px)}
+      .hand .remote-card.forge-hand-right{margin-left:calc(var(--hand-overlap,0px) + 24px)}
+      .hand .remote-card.qol-dragging-card{transform:translateY(var(--hand-y,0px)) rotate(0deg) scale(1.03)!important;z-index:300!important}
+      @media(max-width:980px){
+        :root{--card-w:118px;--card-h:164px}
+        .app{padding-bottom:224px}
+        .table-shell{grid-template-columns:126px minmax(0,1fr) 126px;min-height:calc(100vh - 350px)}
+        .hand-shell{height:216px}.hand{height:178px}.hand .remote-card.forge-hand-focus{transform:translateY(-68px) rotate(0deg) scale(1.22)}
+      }
+      @media(max-width:720px){
+        :root{--card-w:100px;--card-h:139px}
+        .app{padding-bottom:202px}
+        .hand-shell{height:194px}.hand{height:156px;padding-inline:12px}.hand .remote-card.forge-hand-focus{transform:translateY(-58px) rotate(0deg) scale(1.2)}
+      }
+      @media(prefers-reduced-motion:reduce){.hand .remote-card{transition:none}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  function forgeClearHandHover(hand) {
+    hand?.querySelectorAll('.forge-hand-focus,.forge-hand-left,.forge-hand-right').forEach(el=>el.classList.remove('forge-hand-focus','forge-hand-left','forge-hand-right'));
+  }
+
+  function forgeLayoutHand() {
+    forgeInstallCardViewStyle();
+    const hand = $('#hand');
+    if (!hand) return;
+    const cards = [...hand.querySelectorAll(':scope > .remote-card')];
+    const count = cards.length;
+    if (!count) return;
+
+    const rootStyle = getComputedStyle(document.documentElement);
+    const cardWidth = parseFloat(rootStyle.getPropertyValue('--card-w')) || 138;
+    const available = Math.max(cardWidth,hand.clientWidth - 52);
+    const naturalStep = cardWidth * .68;
+    const fitStep = count > 1 ? (available - cardWidth) / (count - 1) : cardWidth;
+    const step = count > 1 ? Math.max(28,Math.min(naturalStep,fitStep)) : cardWidth;
+    const overlap = Math.min(0,step - cardWidth);
+    const middle = (count - 1) / 2;
+
+    cards.forEach((el,index)=>{
+      const delta = index - middle;
+      const normalized = middle ? Math.abs(delta) / middle : 0;
+      const angle = Math.max(-9,Math.min(9,delta * 2.15));
+      const y = Math.round(normalized * normalized * 18);
+      el.style.setProperty('--hand-overlap',`${index===0?0:overlap}px`);
+      el.style.setProperty('--hand-angle',`${angle}deg`);
+      el.style.setProperty('--hand-y',`${y}px`);
+      el.style.setProperty('--hand-z',String(20 + index));
+
+      el.onmouseenter = () => {
+        forgeClearHandHover(hand);
+        el.classList.add('forge-hand-focus');
+        if (cards[index-1]) cards[index-1].classList.add('forge-hand-left');
+        if (cards[index+1]) cards[index+1].classList.add('forge-hand-right');
+      };
+      el.onmouseleave = () => forgeClearHandHover(hand);
+    });
+  }
+
+  forgeInstallCardViewStyle();
+  const forgeCardViewBaseRender = render;
+  render = function() {
+    forgeCardViewBaseRender();
+    requestAnimationFrame(forgeLayoutHand);
+  };
+  window.addEventListener('resize',()=>requestAnimationFrame(forgeLayoutHand));
+  if (window.ResizeObserver && $('#hand')) {
+    const forgeHandResizeObserver = new ResizeObserver(()=>requestAnimationFrame(forgeLayoutHand));
+    forgeHandResizeObserver.observe($('#hand'));
+  }
