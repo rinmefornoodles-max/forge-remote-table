@@ -1,0 +1,66 @@
+
+
+  // High-resolution Scryfall card images.
+  // Prefer Scryfall PNG/large images for newly loaded cards and transparently
+  // upgrade older saved-game normal/small URLs at display time.
+  (() => {
+    function forgeHighResCardUrl(url) {
+      if (!url) return '';
+      const value = String(url);
+      if (!/cards\.scryfall\.io/i.test(value)) return value;
+      return value
+        .replace('/small/', '/large/')
+        .replace('/normal/', '/large/');
+    }
+
+    const forgeBaseImageForScryfall = imageForScryfall;
+    imageForScryfall = function(data, faceIndex=0) {
+      if (!data) return '';
+      const uris = data.image_uris || data.card_faces?.[faceIndex]?.image_uris || data.card_faces?.[0]?.image_uris;
+      if (uris) return uris.png || uris.large || uris.normal || uris.small || forgeBaseImageForScryfall(data, faceIndex) || '';
+      return forgeBaseImageForScryfall(data, faceIndex) || '';
+    };
+
+    const forgeBaseCardTemplate = cardTemplate;
+    cardTemplate = function(data, fallbackName) {
+      const template = forgeBaseCardTemplate(data, fallbackName);
+      const topUris = data?.image_uris;
+      if (topUris) template.image = topUris.png || topUris.large || topUris.normal || topUris.small || template.image || '';
+
+      if (Array.isArray(data?.card_faces) && Array.isArray(template.faces)) {
+        template.faces = template.faces.map((face, index) => {
+          const uris = data.card_faces[index]?.image_uris;
+          if (!uris) return face;
+          return {
+            ...face,
+            image: uris.png || uris.large || uris.normal || uris.small || face.image || ''
+          };
+        });
+      }
+      return template;
+    };
+
+    currentCardImage = function(c) {
+      if (!c) return '';
+      const raw = c.faces?.length
+        ? (c.faces[c.faceIndex]?.image || c.image || '')
+        : (c.image || '');
+      return forgeHighResCardUrl(raw);
+    };
+
+    if (!document.getElementById('forge-hires-card-style')) {
+      const style = document.createElement('style');
+      style.id = 'forge-hires-card-style';
+      style.textContent = `
+        .remote-card img,
+        .inspector-image,
+        .zone-tile .remote-card img {
+          image-rendering:auto!important;
+          object-fit:cover;
+          width:100%;
+          height:100%;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  })();
