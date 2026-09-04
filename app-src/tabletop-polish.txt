@@ -1,0 +1,301 @@
+
+
+  // Tabletop polish: stable hand DOM, reliable double-click tap, duplicate stacks,
+  // larger readable cards, and clean copy behavior.
+  (() => {
+    function forgePolishInstallStyle() {
+      if ($('#forge-tabletop-polish-style')) return;
+      const style = document.createElement('style');
+      style.id = 'forge-tabletop-polish-style';
+      style.textContent = `
+        :root{--card-w:170px;--card-h:237px}
+        .table-shell{grid-template-columns:190px minmax(0,1fr) 190px}
+        .zone-preview .remote-card{transform:scale(.47);margin:-55px}
+        .hand-shell{height:264px}
+        .hand{height:226px}
+        .hand .remote-card.forge-hand-focus{transform:translateY(-104px) rotate(0deg) scale(1.34)!important}
+        .forge-auto-stack-badge{position:absolute;right:-9px;bottom:-8px;z-index:50;min-width:32px;height:25px;display:grid;place-items:center;padding:0 7px;border-radius:999px;border:1px solid #d3a15f;background:#17130e;color:#ffe0a3;font-size:11px;font-weight:950;box-shadow:0 5px 16px rgba(0,0,0,.55)}
+        .remote-card.forge-stack-member{box-shadow:0 7px 18px rgba(0,0,0,.5)}
+        @media(max-width:1200px){:root{--card-w:152px;--card-h:212px}.table-shell{grid-template-columns:170px minmax(0,1fr) 170px}.hand .remote-card.forge-hand-focus{transform:translateY(-92px) rotate(0deg) scale(1.32)!important}}
+        @media(max-width:980px){:root{--card-w:128px;--card-h:178px}.table-shell{grid-template-columns:134px minmax(0,1fr) 134px}.hand-shell{height:226px}.hand{height:188px}.hand .remote-card.forge-hand-focus{transform:translateY(-72px) rotate(0deg) scale(1.28)!important}}
+        @media(max-width:720px){:root{--card-w:106px;--card-h:148px}.hand-shell{height:202px}.hand{height:164px}.hand .remote-card.forge-hand-focus{transform:translateY(-60px) rotate(0deg) scale(1.24)!important}}
+      `;
+      document.head.appendChild(style);
+    }
+
+    function forgeHandVisualSignature() {
+      if (!state?.started) return '';
+      return state.zones.hand.map(id => {
+        const c = card(id);
+        if (!c) return id;
+        return [id,c.faceDown?1:0,c.faceIndex||0,c.tapped?1:0,JSON.stringify(c.counters||{}),JSON.stringify(c.ptBoost||{}),Number(c.stackCount)||1,c.note||''].join(':');
+      }).join('|');
+    }
+
+    let forgeLastHandLayoutKey = '';
+    const forgeOriginalLayoutHand = forgeLayoutHand;
+    forgeLayoutHand = function() {
+      const hand = $('#hand');
+      if (!hand) return;
+      const key = `${forgeHandVisualSignature()}|${Math.round(hand.clientWidth)}`;
+      if (key === forgeLastHandLayoutKey) return;
+      forgeLastHandLayoutKey = key;
+      return forgeOriginalLayoutHand();
+    };
+
+    function forgeUpdateHandSelectedState(hand) {
+      if (!hand) return;
+      hand.querySelectorAll(':scope > .remote-card').forEach(el => {
+        el.classList.toggle('selected', el.dataset.cardId === selectedId);
+      });
+    }
+
+    function forgeStackAnchorId(id) {
+      const c = card(id);
+      if (!c) return null;
+      return c.autoStackAnchor && card(c.autoStackAnchor) ? c.autoStackAnchor : id;
+    }
+
+    function forgeStackMembers(anchorId) {
+      const ids = state.zones.battlefield.filter(id => id === anchorId || card(id)?.autoStackAnchor === anchorId);
+      return ids;
+    }
+
+    function forgeDetachFromStack(id) {
+      const c = card(id);
+      if (!c) return;
+      if (c.autoStackAnchor) {
+        const oldAnchor = c.autoStackAnchor;
+        delete c.autoStackAnchor;
+        forgeReflowStack(oldAnchor);
+        return;
+      }
+      const members = state.zones.battlefield.filter(x => card(x)?.autoStackAnchor === id);
+      if (!members.length) return;
+      const nextAnchorId = members[0];
+      const nextAnchor = card(nextAnchorId);
+      if (!nextAnchor) return;
+      const baseX = Number(c.x)||0, baseY = Number(c.y)||0;
+      delete nextAnchor.autoStackAnchor;
+      nextAnchor.x = baseX;
+      nextAnchor.y = baseY;
+      for (const memberId of members.slice(1)) {
+        const m = card(memberId);
+        if (m) m.autoStackAnchor = nextAnchorId;
+      }
+      forgeReflowStack(nextAnchorId);
+    }
+
+    function forgeReflowStack(anchorId) {
+      const anchor = card(anchorId);
+      if (!anchor || zoneOf(anchorId) !== 'battlefield') return;
+      const ids = forgeStackMembers(anchorId);
+      const baseX = Number(anchor.x)||0, baseY = Number(anchor.y)||0;
+      ids.forEach((id,index) => {
+        const c = card(id);
+        if (!c) return;
+        if (id !== anchorId) c.autoStackAnchor = anchorId;
+        c.x = baseX + index * 10;
+        c.y = baseY + index * 14;
+      });
+    }
+
+    function forgeDuplicateTargetAt(clientX,clientY,dragEl,id,ghost=null) {
+      const oldDrag = dragEl?.style.pointerEvents;
+      const oldGhost = ghost?.style.pointerEvents;
+      if (dragEl) dragEl.style.pointerEvents='none';
+      if (ghost) ghost.style.pointerEvents='none';
+      const hit = document.elementFromPoint(clientX,clientY)?.closest?.('#battlefield .remote-card');
+      if (dragEl) dragEl.style.pointerEvents = oldDrag || '';
+      if (ghost) ghost.style.pointerEvents = oldGhost || '';
+      const targetId = hit?.dataset.cardId;
+      if (!targetId || targetId === id) return null;
+      const a = card(id), b = card(targetId);
+      if (!a || !b) return null;
+      if (String(a.name||'').trim().toLocaleLowerCase() !== String(b.name||'').trim().toLocaleLowerCase()) return null;
+      return targetId;
+    }
+
+    function forgePlaceIntoDuplicateStack(id,targetId) {
+      const c = card(id);
+      const anchorId = forgeStackAnchorId(targetId);
+      const anchor = card(anchorId);
+      if (!c || !anchor) return false;
+      forgeDetachFromStack(id);
+      removeFromZones(id);
+      state.zones.battlefield.push(id);
+      c.autoStackAnchor = anchorId;
+      c.x = Number(anchor.x)||0;
+      c.y = Number(anchor.y)||0;
+      forgeReflowStack(anchorId);
+      logEvent(`${c.name}: stacked with matching permanents.`);
+      render();
+      scheduleSave();
+      return true;
+    }
+
+    function forgeDecorateAutoStacks() {
+      const bf = $('#battlefield');
+      if (!bf) return;
+      bf.querySelectorAll('.forge-auto-stack-badge').forEach(x=>x.remove());
+      bf.querySelectorAll('.remote-card').forEach(x=>x.classList.remove('forge-stack-member'));
+      const anchors = state.zones.battlefield.filter(id => forgeStackMembers(id).length > 1 && !card(id)?.autoStackAnchor);
+      for (const anchorId of anchors) {
+        const ids = forgeStackMembers(anchorId);
+        ids.forEach(id => bf.querySelector(`[data-card-id="${CSS.escape(id)}"]`)?.classList.add('forge-stack-member'));
+        const topId = ids[ids.length-1];
+        const topEl = bf.querySelector(`[data-card-id="${CSS.escape(topId)}"]`);
+        if (topEl) {
+          const badge=document.createElement('span');
+          badge.className='forge-auto-stack-badge';
+          badge.textContent=`×${ids.length}`;
+          badge.title=`${ids.length} copies stacked`;
+          topEl.appendChild(badge);
+        }
+      }
+    }
+
+    const forgeStableBaseRender = render;
+    render = function() {
+      const hand = $('#hand');
+      const beforeSig = forgeHandVisualSignature();
+      const oldNodes = hand ? [...hand.children] : null;
+      const hadNodes = !!oldNodes?.length;
+      forgeStableBaseRender();
+      const newHand = $('#hand');
+      const afterSig = forgeHandVisualSignature();
+      if (hadNodes && newHand && beforeSig === afterSig) {
+        newHand.replaceChildren(...oldNodes);
+        forgeUpdateHandSelectedState(newHand);
+      } else {
+        forgeLastHandLayoutKey = '';
+      }
+      forgeDecorateAutoStacks();
+    };
+
+    const forgeStackBaseMoveCard = moveCard;
+    moveCard = function(id,targetZone,opts={}) {
+      if (zoneOf(id)==='battlefield') forgeDetachFromStack(id);
+      if (targetZone!=='battlefield') {
+        const c=card(id); if(c) delete c.autoStackAnchor;
+      }
+      const result = forgeStackBaseMoveCard(id,targetZone,opts);
+      forgeDecorateAutoStacks();
+      return result;
+    };
+
+    // Replace pointer drag with a version that detects exact duplicates beneath
+    // the drop point and snaps them into an Arena-style staggered stack.
+    qolEnablePointerDrag = function(el,id,originZone) {
+      if (!el || !['battlefield','hand','command'].includes(originZone)) return;
+      el.draggable=false;
+      el.style.touchAction='none';
+      let pointerId=null,startX=0,startY=0,baseX=0,baseY=0,dragging=false,ghost=null,lastTarget=null;
+      let grabOffsetX=0,grabOffsetY=0,grabRatioX=.5,grabRatioY=.5,sourceWidth=1,sourceHeight=1;
+      let movingStackIds=[],movingStackStart=new Map();
+
+      const cleanup=()=>{draggedId=null;document.body.classList.remove('qol-drag-mode');el.classList.remove('qol-dragging-card');lastTarget?.classList.remove('drag-over');lastTarget=null;ghost?.remove();ghost=null;};
+      const positionGhost=(x,y)=>{if(ghost){ghost.style.left=`${x-grabOffsetX}px`;ghost.style.top=`${y-grabOffsetY}px`;}};
+
+      const onMove=e=>{
+        if(pointerId!==e.pointerId)return;
+        const dx=e.clientX-startX,dy=e.clientY-startY;
+        if(!dragging&&Math.hypot(dx,dy)<7)return;
+        if(!dragging){
+          dragging=true;checkpoint();draggedId=id;document.body.classList.add('qol-drag-mode');el.classList.add('qol-dragging-card');
+          if(originZone!=='battlefield'){
+            ghost=el.cloneNode(true);ghost.className='qol-drag-ghost';ghost.removeAttribute('style');ghost.style.width=`${sourceWidth}px`;ghost.style.height=`${sourceHeight}px`;ghost.style.transform='none';document.body.appendChild(ghost);positionGhost(e.clientX,e.clientY);
+          }
+        }
+        e.preventDefault();
+        if(originZone==='battlefield'){
+          const ids = movingStackIds.length ? movingStackIds : [id];
+          for(const sid of ids){
+            const c=card(sid),start=movingStackStart.get(sid);if(!c||!start)continue;
+            c.x=Math.max(0,start.x+dx);c.y=Math.max(0,start.y+dy);
+            const node=$(`#battlefield [data-card-id="${CSS.escape(sid)}"]`);if(node){node.style.left=`${c.x}px`;node.style.top=`${c.y}px`;}
+          }
+        }else positionGhost(e.clientX,e.clientY);
+        const target=qolDropTargetAt(e.clientX,e.clientY,el);if(lastTarget!==target){lastTarget?.classList.remove('drag-over');target?.classList.add('drag-over');lastTarget=target;}
+      };
+
+      const onUp=e=>{
+        if(pointerId!==e.pointerId)return;
+        try{el.releasePointerCapture(pointerId);}catch{}
+        if(!dragging){pointerId=null;return;}
+        qolSuppressCardClicksUntil=Date.now()+420;
+        const duplicateTarget=forgeDuplicateTargetAt(e.clientX,e.clientY,el,id,ghost);
+        const target=qolDropTargetAt(e.clientX,e.clientY,el);
+        const targetZone=target?.dataset.dropZone;
+        const origin=zoneOf(id);
+        cleanup();pointerId=null;
+
+        if(duplicateTarget && targetZone==='battlefield'){
+          forgePlaceIntoDuplicateStack(id,duplicateTarget);
+          return;
+        }
+
+        if(targetZone){
+          if(targetZone==='battlefield'){
+            if(origin==='battlefield'){
+              const wasStacked = !!card(id)?.autoStackAnchor || forgeStackMembers(id).length>1;
+              if(wasStacked){forgeDetachFromStack(id);render();scheduleSave();}
+              else {logEvent(`${card(id)?.name||'Card'}: repositioned on battlefield.`);scheduleSave();}
+            }else{
+              const bf=$('#battlefield'),rect=bf.getBoundingClientRect();const size=qolBattlefieldCardSize();
+              const x=Math.max(0,e.clientX-rect.left-grabRatioX*size.width+bf.scrollLeft),y=Math.max(0,e.clientY-rect.top-grabRatioY*size.height+bf.scrollTop);
+              moveCard(id,'battlefield',{x,y,checkpoint:false});
+            }
+          }else if(targetZone==='library')moveCard(id,'library',{placement:'top',checkpoint:false});
+          else moveCard(id,targetZone,{checkpoint:false});
+        }else if(originZone==='battlefield'){
+          const wasStacked = !!card(id)?.autoStackAnchor || forgeStackMembers(id).length>1;
+          if(wasStacked){forgeDetachFromStack(id);render();}
+          scheduleSave();
+        }else{history.pop();render();}
+      };
+
+      el.addEventListener('pointerdown',e=>{
+        if(e.button!==0||pointerId!==null)return;
+        pointerId=e.pointerId;startX=e.clientX;startY=e.clientY;const c=card(id);baseX=Number(c?.x)||0;baseY=Number(c?.y)||0;
+        const rect=el.getBoundingClientRect();sourceWidth=Math.max(1,rect.width);sourceHeight=Math.max(1,rect.height);grabOffsetX=Math.max(0,Math.min(sourceWidth,e.clientX-rect.left));grabOffsetY=Math.max(0,Math.min(sourceHeight,e.clientY-rect.top));grabRatioX=grabOffsetX/sourceWidth;grabRatioY=grabOffsetY/sourceHeight;
+        movingStackIds = originZone==='battlefield' && forgeStackMembers(id).length>1 && !card(id)?.autoStackAnchor ? forgeStackMembers(id) : [id];
+        movingStackStart = new Map(movingStackIds.map(sid=>[sid,{x:Number(card(sid)?.x)||0,y:Number(card(sid)?.y)||0}]));
+        try{el.setPointerCapture(pointerId);}catch{}
+      });
+      el.addEventListener('pointermove',onMove);el.addEventListener('pointerup',onUp);el.addEventListener('pointercancel',onUp);
+      el.addEventListener('click',e=>{if(Date.now()<qolSuppressCardClicksUntil){e.preventDefault();e.stopImmediatePropagation();}},true);
+    };
+
+    // Capture-phase double click beats the single-click capture interceptor.
+    document.addEventListener('dblclick',e=>{
+      const el=e.target.closest?.('#battlefield .remote-card');
+      const id=el?.dataset.cardId;
+      if(!id||!card(id))return;
+      e.preventDefault();e.stopImmediatePropagation();
+      toggleTapped(id);
+    },true);
+
+    // Copies should copy the card, not counters/markers/state that are not copyable values.
+    const forgeCopyBaseInspectorAction = inspectorAction;
+    inspectorAction = function(action) {
+      if(action==='copy'){
+        const c=card(selectedId);if(!c)return;
+        checkpoint();
+        const clone=makeInstance(deepCopy(c),{id:uid(),token:true,x:(Number(c.x)||25)+28,y:(Number(c.y)||25)+28,tapped:false});
+        clone.counters={};
+        delete clone.ptBoost;
+        delete clone.stackCount;
+        delete clone.autoStackAnchor;
+        clone.note='';
+        addInstanceToState(clone,'battlefield');
+        logEvent(`Created a clean copy of ${c.name}.`);
+        render();scheduleSave();
+        if(selectedId&&card(selectedId))openInspector(selectedId);
+        return;
+      }
+      return forgeCopyBaseInspectorAction(action);
+    };
+
+    forgePolishInstallStyle();
+  })();
