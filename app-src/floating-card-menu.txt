@@ -1,171 +1,121 @@
 
-
-  // Floating right-click card menu + larger zone browsers.
+  // Authoritative floating card inspector + enlarged zone browsers.
   (() => {
-    let forgeMenuAnchor = null;
+    let forgeInspectorAnchor = null;
 
-    function forgeInstallFloatingUiStyle() {
-      if ($('#forge-floating-ui-style')) return;
-      const style = document.createElement('style');
-      style.id = 'forge-floating-ui-style';
+    function installFloatingInspectorStyle() {
+      let style = document.getElementById('forge-floating-ui-style');
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'forge-floating-ui-style';
+        document.head.appendChild(style);
+      }
       style.textContent = `
-        #forge-card-menu{position:fixed;z-index:90;width:min(560px,calc(100vw - 24px));max-height:min(760px,calc(100vh - 24px));overflow:auto;border:1px solid #61766d;border-radius:16px;background:linear-gradient(155deg,rgba(23,33,31,.99),rgba(11,17,15,.99));box-shadow:0 24px 70px rgba(0,0,0,.7),0 0 0 1px rgba(208,164,95,.08) inset;padding:16px;}
-        #forge-card-menu[hidden]{display:none!important}
-        .forge-card-menu-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
-        .forge-card-menu-head h2{font-size:22px;line-height:1.08;margin:3px 0 2px}.forge-card-menu-zone{color:var(--gold);font-size:10px;font-weight:900;letter-spacing:.13em;text-transform:uppercase}.forge-card-menu-type{color:var(--muted);font-size:11px}
-        .forge-card-menu-close{flex:0 0 auto;width:32px;height:32px;border:1px solid var(--line);border-radius:9px;background:#101816;cursor:pointer;font-size:19px}
-        .forge-card-menu-body{display:grid;grid-template-columns:180px minmax(0,1fr);gap:15px;align-items:start}
-        .forge-card-menu-preview{width:180px;aspect-ratio:488/680;border-radius:11px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.48);background:#0b1110}.forge-card-menu-preview img{width:100%;height:100%;object-fit:cover;display:block}.forge-card-menu-preview .card-fallback{height:100%}
-        .forge-card-menu-oracle{white-space:pre-wrap;max-height:125px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:#0a100f;color:#bdcac4;padding:9px;font-size:11px;line-height:1.42;margin-bottom:10px}
-        .forge-card-menu-section{margin-top:10px}.forge-card-menu-section>strong{display:block;color:var(--gold);font-size:9px;letter-spacing:.11em;text-transform:uppercase;margin-bottom:6px}
-        .forge-card-menu-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.forge-card-menu-actions button{min-height:37px;border:1px solid var(--line);border-radius:8px;background:#18231f;color:#e6eee9;padding:7px 6px;font-size:10px;font-weight:750;cursor:pointer}.forge-card-menu-actions button:hover{border-color:#7a9187;background:#21312b}.forge-card-menu-actions button.danger{color:#ffc0c0;border-color:#654242;background:#281919}.forge-card-menu-actions button:disabled{opacity:.4;cursor:not-allowed}
-        #zone-modal .zone-modal{width:min(1680px,96vw);max-height:94vh;padding:26px}
-        #zone-modal .zone-card-grid{grid-template-columns:repeat(auto-fill,minmax(190px,220px));justify-content:start;gap:18px;align-items:start;padding:10px 2px 18px}
-        #zone-modal .zone-tile{width:100%;min-width:190px}
+        #inspector{
+          z-index:2147483000!important;
+          background:transparent!important;
+          backdrop-filter:none!important;
+          pointer-events:none!important;
+          display:block;
+          padding:0!important;
+        }
+        #inspector[hidden]{display:none!important}
+        #inspector .inspector-modal{
+          position:fixed!important;
+          width:min(960px,calc(100vw - 24px))!important;
+          max-height:calc(100vh - 24px)!important;
+          overflow:auto!important;
+          margin:0!important;
+          padding:22px!important;
+          pointer-events:auto!important;
+          border:1px solid #70877d!important;
+          border-radius:18px!important;
+          background:linear-gradient(155deg,rgba(23,33,31,.998),rgba(9,14,13,.998))!important;
+          box-shadow:0 30px 90px rgba(0,0,0,.82),0 0 0 1px rgba(241,199,121,.10) inset!important;
+        }
+        #inspector .inspector-layout{grid-template-columns:360px minmax(0,1fr)!important;gap:24px!important}
+        #inspector .inspector-image{width:360px!important;max-width:100%!important;border-radius:15px!important;box-shadow:0 18px 46px rgba(0,0,0,.62)!important}
+        #inspector .inspector-meta h2{font-size:30px!important}
+        #inspector .oracle-text{max-height:220px!important;font-size:13px!important;line-height:1.5!important;padding:13px!important}
+        #inspector .action-grid{gap:8px!important}
+        #inspector .action-grid button{min-height:43px!important;padding:9px 8px!important;font-size:11px!important;font-weight:800!important}
+        #inspector .modal-close{pointer-events:auto!important;width:38px!important;height:38px!important;font-size:22px!important}
+
+        #zone-modal{z-index:100!important}
+        #zone-modal .zone-modal{width:min(1760px,97vw)!important;max-height:95vh!important;padding:28px!important}
+        #zone-modal .zone-card-grid{grid-template-columns:repeat(auto-fill,minmax(210px,240px))!important;justify-content:start!important;gap:20px!important;align-items:start!important;padding:12px 2px 22px!important}
+        #zone-modal .zone-tile{width:100%!important;min-width:210px!important}
         #zone-modal .zone-tile .remote-card{width:100%!important;height:auto!important;aspect-ratio:488/680!important}
-        #zone-modal .zone-index{font-size:10px;margin-top:6px}
-        #zone-modal .modal-heading-row{position:sticky;top:-26px;z-index:4;margin:-26px -26px 8px;padding:24px 26px 14px;background:linear-gradient(#17211f 78%,rgba(23,33,31,.94));border-bottom:1px solid rgba(75,98,91,.55)}
-        #zone-modal .zone-modal-tools{position:sticky;top:64px;z-index:3;background:#131d1a;padding:8px 0;margin:0 0 8px}
-        @media(max-width:800px){#forge-card-menu{width:min(440px,calc(100vw - 18px));padding:12px}.forge-card-menu-body{grid-template-columns:130px minmax(0,1fr);gap:10px}.forge-card-menu-preview{width:130px}.forge-card-menu-actions{grid-template-columns:repeat(2,minmax(0,1fr))}#zone-modal .zone-card-grid{grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:12px}#zone-modal .zone-tile{min-width:0}}
+        #zone-modal .zone-index{font-size:10px!important;margin-top:6px!important}
+        #zone-modal .modal-heading-row{position:sticky!important;top:-28px!important;z-index:4!important;margin:-28px -28px 8px!important;padding:25px 28px 15px!important;background:linear-gradient(#17211f 80%,rgba(23,33,31,.95))!important;border-bottom:1px solid rgba(75,98,91,.55)!important}
+        #zone-modal .zone-modal-tools{position:sticky!important;top:68px!important;z-index:3!important;background:#131d1a!important;padding:8px 0!important;margin:0 0 8px!important}
+
+        @media(max-width:1050px){
+          #inspector .inspector-modal{width:min(820px,calc(100vw - 18px))!important;padding:18px!important}
+          #inspector .inspector-layout{grid-template-columns:300px minmax(0,1fr)!important;gap:18px!important}
+          #inspector .inspector-image{width:300px!important}
+        }
+        @media(max-width:760px){
+          #inspector .inspector-modal{width:calc(100vw - 12px)!important;max-height:calc(100vh - 12px)!important;padding:14px!important}
+          #inspector .inspector-layout{grid-template-columns:1fr!important}
+          #inspector .inspector-image{width:min(380px,80vw)!important;margin:0 auto!important;display:block!important}
+          #inspector .action-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+          #zone-modal .zone-card-grid{grid-template-columns:repeat(auto-fill,minmax(155px,1fr))!important;gap:12px!important}
+          #zone-modal .zone-tile{min-width:0!important}
+        }
       `;
-      document.head.appendChild(style);
     }
 
-    function forgeEnsureCardMenu() {
-      forgeInstallFloatingUiStyle();
-      let menu = $('#forge-card-menu');
-      if (menu) return menu;
-      menu = document.createElement('aside');
-      menu.id = 'forge-card-menu';
-      menu.hidden = true;
-      menu.setAttribute('role','dialog');
-      menu.setAttribute('aria-label','Card actions');
-      document.body.appendChild(menu);
+    function positionFloatingInspector(anchorRect) {
+      const modal = document.querySelector('#inspector .inspector-modal');
+      const backdrop = document.getElementById('inspector');
+      if (!modal || !backdrop || backdrop.hidden) return;
 
-      menu.addEventListener('click', e => {
-        const close = e.target.closest?.('[data-forge-menu-close]');
-        if (close) { forgeCloseCardMenu(); return; }
-        const move = e.target.closest?.('[data-forge-menu-move]');
-        if (move && selectedId && card(selectedId)) {
-          const id = selectedId;
-          const target = move.dataset.forgeMenuMove;
-          if (target === 'library-top') moveCard(id,'library',{placement:'top'});
-          else if (target === 'library-bottom') moveCard(id,'library',{placement:'bottom'});
-          else moveCard(id,target);
-          forgeCloseCardMenu();
-          return;
-        }
-        const action = e.target.closest?.('[data-forge-menu-action]');
-        if (action && selectedId && card(selectedId)) {
-          const id = selectedId;
-          inspectorAction(action.dataset.forgeMenuAction);
-          if (!card(id)) forgeCloseCardMenu();
-        }
-      });
-      return menu;
-    }
+      const gap = 16;
+      const margin = 10;
+      const rect = modal.getBoundingClientRect();
+      const anchor = anchorRect || forgeInspectorAnchor?.rect || {left:innerWidth/2,right:innerWidth/2,top:70,bottom:250};
 
-    function forgeCloseCardMenu() {
-      const menu = $('#forge-card-menu');
-      if (menu) menu.hidden = true;
-    }
-
-    function forgePositionCardMenu(anchorRect) {
-      const menu = $('#forge-card-menu');
-      if (!menu || menu.hidden) return;
-      const gap = 14;
-      const margin = 12;
-      const rect = menu.getBoundingClientRect();
-      const anchor = anchorRect || forgeMenuAnchor?.rect || {left:window.innerWidth/2,right:window.innerWidth/2,top:80,bottom:250};
       let left = anchor.right + gap;
-      if (left + rect.width > window.innerWidth - margin) left = anchor.left - rect.width - gap;
-      if (left < margin) left = Math.max(margin,window.innerWidth - rect.width - margin);
+      if (left + rect.width > innerWidth - margin) left = anchor.left - rect.width - gap;
+      if (left < margin) left = Math.max(margin, innerWidth - rect.width - margin);
+
       let top = anchor.top;
-      if (top + rect.height > window.innerHeight - margin) top = window.innerHeight - rect.height - margin;
-      top = Math.max(margin,top);
-      menu.style.left = `${Math.round(left)}px`;
-      menu.style.top = `${Math.round(top)}px`;
+      if (top + rect.height > innerHeight - margin) top = innerHeight - rect.height - margin;
+      top = Math.max(margin, top);
+
+      modal.style.left = `${Math.round(left)}px`;
+      modal.style.top = `${Math.round(top)}px`;
     }
 
-    function forgeCardFallback(c) {
-      return `<div class="card-fallback"><strong>${escapeHtml(c.name)}</strong><small>${escapeHtml(c.typeLine||'')}</small><small>${escapeHtml(c.oracleText||'')}</small></div>`;
-    }
+    installFloatingInspectorStyle();
 
-    function forgeRenderCardMenu(id) {
-      const c = card(id); if (!c) return;
-      const menu = forgeEnsureCardMenu();
-      selectedId = id;
-      const zone = zoneOf(id) || 'outside';
-      const image = currentCardImage(c);
-      const hasCounters = Object.values(c.counters||{}).some(v=>Number(v)!==0) || Number(c.ptBoost?.power||0)!==0 || Number(c.ptBoost?.toughness||0)!==0;
-      const stackLabel = Number(c.stackCount)>1 ? `Stack count ×${Number(c.stackCount)}` : 'Stack count';
-      menu.innerHTML = `
-        <div class="forge-card-menu-head">
-          <div><div class="forge-card-menu-zone">${escapeHtml(zone)}</div><h2>${escapeHtml(c.name)}</h2><div class="forge-card-menu-type">${escapeHtml(c.manaCost?`${c.manaCost} · ${c.typeLine}`:c.typeLine||'')}</div></div>
-          <button class="forge-card-menu-close" type="button" data-forge-menu-close aria-label="Close">×</button>
-        </div>
-        <div class="forge-card-menu-body">
-          <div class="forge-card-menu-preview">${image&&!c.faceDown?`<img src="${escapeHtml(image)}" alt="${escapeHtml(c.name)}">`:forgeCardFallback(c)}</div>
-          <div>
-            <div class="forge-card-menu-oracle">${escapeHtml(c.oracleText||'No rules text loaded.')}</div>
-            <div class="forge-card-menu-section"><strong>Card state</strong><div class="forge-card-menu-actions">
-              <button data-forge-menu-action="tap">${c.tapped?'Untap':'Tap'}</button>
-              <button data-forge-menu-action="facedown">${c.faceDown?'Turn face up':'Turn face down'}</button>
-              <button data-forge-menu-action="transform" ${c.faces?.length>1?'':'disabled'}>Transform / flip</button>
-              <button data-forge-menu-action="plus">+1/+1 counter</button>
-              <button data-forge-menu-action="minus">-1/-1 counter</button>
-              <button data-forge-menu-action="counter">Set counters…</button>
-              <button data-forge-menu-action="ptmarker">P/T modifier</button>
-              <button data-forge-menu-action="stack">${escapeHtml(stackLabel)}</button>
-              <button data-forge-menu-action="clearcounters" ${hasCounters?'':'disabled'}>Clear counters / P-T</button>
-              <button data-forge-menu-action="copy">Make copy</button>
-              <button data-forge-menu-action="note">Card note</button>
-              <button class="danger" data-forge-menu-action="delete">Delete object</button>
-            </div></div>
-            <div class="forge-card-menu-section"><strong>Move card</strong><div class="forge-card-menu-actions">
-              <button data-forge-menu-move="hand">Hand</button><button data-forge-menu-move="battlefield">Battlefield</button><button data-forge-menu-move="graveyard">Graveyard</button>
-              <button data-forge-menu-move="exile">Exile</button><button data-forge-menu-move="command">Command</button><button data-forge-menu-move="library-top">Library top</button>
-              <button data-forge-menu-move="library-bottom">Library bottom</button>
-            </div></div>
-          </div>
-        </div>`;
-      menu.hidden = false;
-      requestAnimationFrame(()=>forgePositionCardMenu(forgeMenuAnchor?.rect));
-    }
-
-    // Window capture happens before the existing document-level right-click
-    // handler. Record the exact card that was clicked so openInspector can
-    // anchor the floating menu next to that card.
     window.addEventListener('contextmenu', e => {
       const el = e.target.closest?.('.remote-card');
       const id = el?.dataset.cardId;
       if (!id || !card(id)) return;
-      forgeMenuAnchor = {id,rect:el.getBoundingClientRect(),x:e.clientX,y:e.clientY,time:Date.now()};
+      forgeInspectorAnchor = {id,rect:el.getBoundingClientRect(),time:Date.now()};
     }, true);
 
-    const forgeModalInspector = openInspector;
+    const baseOpenInspector = openInspector;
     openInspector = function(id) {
       if (!id || !card(id)) return;
-      // Keep the old modal closed; right-click now uses the floating menu.
-      const old = $('#inspector'); if (old) old.hidden = true;
-      if (!forgeMenuAnchor || forgeMenuAnchor.id !== id || Date.now()-forgeMenuAnchor.time > 5000) {
-        const el = [...document.querySelectorAll(`.remote-card[data-card-id="${CSS.escape(id)}"]`)].find(node => {
-          const r=node.getBoundingClientRect(); return r.width>0&&r.height>0&&r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth;
-        });
-        if (el) forgeMenuAnchor = {id,rect:el.getBoundingClientRect(),time:Date.now()};
+      baseOpenInspector(id);
+      installFloatingInspectorStyle();
+
+      if (!forgeInspectorAnchor || forgeInspectorAnchor.id !== id || Date.now()-forgeInspectorAnchor.time > 5000) {
+        const nodes = [...document.querySelectorAll('.remote-card')];
+        const el = nodes.find(node => node.dataset.cardId === id && (() => {
+          const r = node.getBoundingClientRect();
+          return r.width>0 && r.height>0 && r.bottom>0 && r.right>0 && r.top<innerHeight && r.left<innerWidth;
+        })());
+        if (el) forgeInspectorAnchor = {id,rect:el.getBoundingClientRect(),time:Date.now()};
       }
-      forgeRenderCardMenu(id);
+
+      requestAnimationFrame(() => positionFloatingInspector(forgeInspectorAnchor?.rect));
     };
 
-    document.addEventListener('pointerdown', e => {
-      const menu = $('#forge-card-menu');
-      if (!menu || menu.hidden) return;
-      if (menu.contains(e.target)) return;
-      if (e.target.closest?.('.remote-card')) return;
-      forgeCloseCardMenu();
-    }, true);
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') forgeCloseCardMenu(); }, true);
-    window.addEventListener('resize',()=>{ if (!$('#forge-card-menu')?.hidden) forgePositionCardMenu(forgeMenuAnchor?.rect); });
-
-    forgeInstallFloatingUiStyle();
+    window.addEventListener('resize', () => {
+      if (!document.getElementById('inspector')?.hidden) positionFloatingInspector(forgeInspectorAnchor?.rect);
+    });
   })();
