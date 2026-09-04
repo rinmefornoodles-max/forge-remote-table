@@ -1,0 +1,61 @@
+
+
+  // Hard cleanup for temporary drag ghosts. A hand card can move correctly in
+  // state while its visual drag clone survives after pointer release. Never let
+  // those temporary clones persist once the drag is over.
+  (() => {
+    let forgePointerDragActive = false;
+
+    function forgeRemoveDragGhosts() {
+      document.querySelectorAll('.qol-drag-ghost').forEach(node => node.remove());
+      if (!forgePointerDragActive) {
+        document.body.classList.remove('qol-drag-mode');
+        document.querySelectorAll('.qol-dragging-card').forEach(node => node.classList.remove('qol-dragging-card'));
+        draggedId = null;
+      }
+    }
+
+    document.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      if (e.target.closest?.('.remote-card')) forgePointerDragActive = true;
+    }, true);
+
+    const finishPointerDrag = () => {
+      forgePointerDragActive = false;
+      // Clean immediately, then again after any queued drop/render work.
+      forgeRemoveDragGhosts();
+      queueMicrotask(forgeRemoveDragGhosts);
+      requestAnimationFrame(forgeRemoveDragGhosts);
+      setTimeout(forgeRemoveDragGhosts, 0);
+      setTimeout(forgeRemoveDragGhosts, 80);
+    };
+
+    document.addEventListener('pointerup', finishPointerDrag, true);
+    document.addEventListener('pointercancel', finishPointerDrag, true);
+    window.addEventListener('blur', finishPointerDrag);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) finishPointerDrag();
+    });
+
+    // If a delayed handler inserts a ghost after pointerup, remove it as soon as
+    // it appears while no card drag is active.
+    const observer = new MutationObserver(mutations => {
+      if (forgePointerDragActive) return;
+      let sawGhost = false;
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches?.('.qol-drag-ghost') || node.querySelector?.('.qol-drag-ghost')) {
+            sawGhost = true;
+            break;
+          }
+        }
+        if (sawGhost) break;
+      }
+      if (sawGhost) forgeRemoveDragGhosts();
+    });
+    observer.observe(document.body,{childList:true,subtree:true});
+
+    // Clear any ghost left over from an earlier broken drag as soon as this fix loads.
+    forgeRemoveDragGhosts();
+  })();
