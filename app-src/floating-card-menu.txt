@@ -119,3 +119,327 @@
       if (!document.getElementById('inspector')?.hidden) positionFloatingInspector(forgeInspectorAnchor?.rect);
     });
   })();
+
+  // Directional duplicate stacking.
+  // Drop on the upper half of a matching permanent to place this card above it;
+  // drop on the lower half to place it below. Normal drag moves one card;
+  // Shift-drag moves an entire existing stack together.
+  (() => {
+    function installDirectionalStackStyle() {
+      if (document.getElementById('forge-directional-stack-style')) return;
+      const style = document.createElement('style');
+      style.id = 'forge-directional-stack-style';
+      style.textContent = `
+        .forge-stack-drop-hint{
+          position:absolute;left:5px;right:5px;height:42%;z-index:160;display:grid;place-items:center;
+          pointer-events:none;border:2px solid #f1c779;border-radius:8px;background:rgba(18,32,26,.78);
+          color:#fff4d7;font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;
+          text-shadow:0 2px 4px #000;box-shadow:0 0 20px rgba(241,199,121,.35) inset,0 5px 16px rgba(0,0,0,.45)
+        }
+        .forge-stack-drop-hint.above{top:5px}
+        .forge-stack-drop-hint.below{bottom:5px}
+      `;
+      document.head.appendChild(style);
+    }
+
+    function stackAnchorId(id) {
+      const c = card(id);
+      if (!c) return null;
+      return c.autoStackAnchor && card(c.autoStackAnchor) ? c.autoStackAnchor : id;
+    }
+
+    function stackMembers(anchorId) {
+      if (!anchorId) return [];
+      return state.zones.battlefield.filter(id => id === anchorId || card(id)?.autoStackAnchor === anchorId);
+    }
+
+    function reflowStack(anchorId) {
+      const anchor = card(anchorId);
+      if (!anchor || zoneOf(anchorId) !== 'battlefield') return;
+      const ids = stackMembers(anchorId);
+      const baseX = Number(anchor.x)||0;
+      const baseY = Number(anchor.y)||0;
+      ids.forEach((sid,index) => {
+        const c = card(sid);
+        if (!c) return;
+        if (sid === anchorId) delete c.autoStackAnchor;
+        else c.autoStackAnchor = anchorId;
+        c.x = baseX + index * 10;
+        c.y = baseY + index * 14;
+      });
+    }
+
+    function detachFromStack(id) {
+      const c = card(id);
+      if (!c) return;
+      if (c.autoStackAnchor) {
+        const oldAnchor = c.autoStackAnchor;
+        delete c.autoStackAnchor;
+        reflowStack(oldAnchor);
+        return;
+      }
+      const members = state.zones.battlefield.filter(x => card(x)?.autoStackAnchor === id);
+      if (!members.length) return;
+      const nextAnchorId = members[0];
+      const nextAnchor = card(nextAnchorId);
+      if (!nextAnchor) return;
+      const baseX = Number(c.x)||0;
+      const baseY = Number(c.y)||0;
+      delete nextAnchor.autoStackAnchor;
+      nextAnchor.x = baseX;
+      nextAnchor.y = baseY;
+      for (const memberId of members.slice(1)) {
+        const m = card(memberId);
+        if (m) m.autoStackAnchor = nextAnchorId;
+      }
+      reflowStack(nextAnchorId);
+    }
+
+    function clearStackDropHint() {
+      document.querySelectorAll('.forge-stack-drop-hint').forEach(el => el.remove());
+    }
+
+    function showStackDropHint(info) {
+      clearStackDropHint();
+      if (!info?.targetEl) return;
+      const hint = document.createElement('span');
+      hint.className = `forge-stack-drop-hint ${info.direction}`;
+      hint.textContent = info.direction === 'above' ? '↑ Place above' : '↓ Place below';
+      info.targetEl.appendChild(hint);
+    }
+
+    function duplicateDropInfoAt(clientX,clientY,dragEl,id,ghost=null,ignoreIds=[]) {
+      const nodes = [];
+      const addNode = node => { if (node && !nodes.includes(node)) nodes.push(node); };
+      addNode(dragEl);
+      addNode(ghost);
+      for (const sid of ignoreIds) addNode(document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(sid)}"]`));
+
+      const previous = nodes.map(node => [node,node.style.pointerEvents]);
+      nodes.forEach(node => { node.style.pointerEvents='none'; });
+      const hit = document.elementFromPoint(clientX,clientY)?.closest?.('#battlefield .remote-card');
+      previous.forEach(([node,value]) => { node.style.pointerEvents=value||''; });
+
+      const targetId = hit?.dataset.cardId;
+      if (!targetId || targetId === id || ignoreIds.includes(targetId)) return null;
+      const a = card(id), b = card(targetId);
+      if (!a || !b) return null;
+      if (String(a.name||'').trim().toLocaleLowerCase() !== String(b.name||'').trim().toLocaleLowerCase()) return null;
+
+      const rect = hit.getBoundingClientRect();
+      const direction = clientY < rect.top + rect.height/2 ? 'above' : 'below';
+      return {targetId,targetEl:hit,direction,rect};
+    }
+
+    function placeRelativeInStack(id,targetId,direction) {
+      const moving = card(id);
+      const target = card(targetId);
+      if (!moving || !target) return false;
+      if (String(moving.name||'').trim().toLocaleLowerCase() !== String(target.name||'').trim().toLocaleLowerCase()) return false;
+
+      const targetAnchorId = stackAnchorId(targetId);
+      const baseAnchor = card(targetAnchorId);
+      if (!baseAnchor) return false;
+      const baseX = Number(baseAnchor.x)||0;
+      const baseY = Number(baseAnchor.y)||0;
+
+      const group = stackMembers(targetAnchorId).filter(sid => sid !== id);
+      const targetIndex = group.indexOf(targetId);
+      if (targetIndex < 0) return false;
+
+      if (zoneOf(id) === 'battlefield') detachFromStack(id);
+      removeFromZones(id);
+
+      const order = [...group];
+      const insertAt = direction === 'above' ? targetIndex + 1 : targetIndex;
+      order.splice(insertAt,0,id);
+      const uniqueOrder = [...new Set(order)].filter(sid => !!card(sid));
+
+      state.zones.battlefield = state.zones.battlefield.filter(sid => !uniqueOrder.includes(sid));
+      state.zones.battlefield.push(...uniqueOrder);
+
+      const newAnchorId = uniqueOrder[0];
+      uniqueOrder.forEach((sid,index) => {
+        const c = card(sid);
+        if (!c) return;
+        if (sid === newAnchorId) delete c.autoStackAnchor;
+        else c.autoStackAnchor = newAnchorId;
+        c.x = baseX + index * 10;
+        c.y = baseY + index * 14;
+      });
+
+      logEvent(`${moving.name}: placed ${direction} matching permanent in stack.`);
+      render();
+      scheduleSave();
+      return true;
+    }
+
+    installDirectionalStackStyle();
+
+    qolEnablePointerDrag = function(el,id,originZone) {
+      if (!el || !['battlefield','hand','command'].includes(originZone)) return;
+      el.draggable=false;
+      el.style.touchAction='none';
+      let pointerId=null,startX=0,startY=0,dragging=false,ghost=null,lastTarget=null;
+      let grabOffsetX=0,grabOffsetY=0,grabRatioX=.5,grabRatioY=.5,sourceWidth=1,sourceHeight=1;
+      let movingStackIds=[],movingStackStart=new Map();
+
+      const cleanup=()=>{
+        draggedId=null;
+        document.body.classList.remove('qol-drag-mode');
+        el.classList.remove('qol-dragging-card');
+        lastTarget?.classList.remove('drag-over');
+        lastTarget=null;
+        ghost?.remove();
+        ghost=null;
+        clearStackDropHint();
+      };
+      const positionGhost=(x,y)=>{if(ghost){ghost.style.left=`${x-grabOffsetX}px`;ghost.style.top=`${y-grabOffsetY}px`;}};
+
+      const onMove=e=>{
+        if(pointerId!==e.pointerId)return;
+        const dx=e.clientX-startX,dy=e.clientY-startY;
+        if(!dragging&&Math.hypot(dx,dy)<7)return;
+        if(!dragging){
+          dragging=true;
+          checkpoint();
+          draggedId=id;
+          document.body.classList.add('qol-drag-mode');
+          el.classList.add('qol-dragging-card');
+          if(originZone!=='battlefield'){
+            ghost=el.cloneNode(true);
+            ghost.className='qol-drag-ghost';
+            ghost.removeAttribute('style');
+            ghost.style.width=`${sourceWidth}px`;
+            ghost.style.height=`${sourceHeight}px`;
+            ghost.style.transform='none';
+            document.body.appendChild(ghost);
+            positionGhost(e.clientX,e.clientY);
+          }
+        }
+        e.preventDefault();
+
+        if(originZone==='battlefield'){
+          const ids = movingStackIds.length ? movingStackIds : [id];
+          for(const sid of ids){
+            const c=card(sid),start=movingStackStart.get(sid);
+            if(!c||!start)continue;
+            c.x=Math.max(0,start.x+dx);
+            c.y=Math.max(0,start.y+dy);
+            const node=document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(sid)}"]`);
+            if(node){node.style.left=`${c.x}px`;node.style.top=`${c.y}px`;}
+          }
+        } else positionGhost(e.clientX,e.clientY);
+
+        const target=qolDropTargetAt(e.clientX,e.clientY,el);
+        if(lastTarget!==target){
+          lastTarget?.classList.remove('drag-over');
+          target?.classList.add('drag-over');
+          lastTarget=target;
+        }
+
+        const info = movingStackIds.length>1 ? null : duplicateDropInfoAt(e.clientX,e.clientY,el,id,ghost,movingStackIds);
+        showStackDropHint(info);
+      };
+
+      const onUp=e=>{
+        if(pointerId!==e.pointerId)return;
+        try{el.releasePointerCapture(pointerId);}catch{}
+        if(!dragging){pointerId=null;clearStackDropHint();return;}
+        qolSuppressCardClicksUntil=Date.now()+420;
+
+        const movingWholeStack = movingStackIds.length>1;
+        const info = movingWholeStack ? null : duplicateDropInfoAt(e.clientX,e.clientY,el,id,ghost,movingStackIds);
+        const target=qolDropTargetAt(e.clientX,e.clientY,el);
+        const targetZone=target?.dataset.dropZone;
+        const origin=zoneOf(id);
+        const wholeStackIds=[...movingStackIds];
+        cleanup();
+        pointerId=null;
+
+        if(info && targetZone==='battlefield'){
+          placeRelativeInStack(id,info.targetId,info.direction);
+          return;
+        }
+
+        if(movingWholeStack){
+          if(!targetZone || targetZone==='battlefield'){
+            logEvent(`${card(id)?.name||'Stack'}: repositioned stack on battlefield.`);
+            render();
+            scheduleSave();
+            return;
+          }
+          for(const sid of wholeStackIds){
+            const c=card(sid);
+            if(c) delete c.autoStackAnchor;
+            if(targetZone==='library') moveCard(sid,'library',{placement:'top',checkpoint:false});
+            else moveCard(sid,targetZone,{checkpoint:false});
+          }
+          return;
+        }
+
+        if(targetZone){
+          if(targetZone==='battlefield'){
+            if(origin==='battlefield'){
+              const anchorId=stackAnchorId(id);
+              const wasStacked=!!card(id)?.autoStackAnchor || stackMembers(anchorId).length>1;
+              if(wasStacked){
+                detachFromStack(id);
+                render();
+                scheduleSave();
+              } else {
+                logEvent(`${card(id)?.name||'Card'}: repositioned on battlefield.`);
+                scheduleSave();
+              }
+            } else {
+              const bf=document.getElementById('battlefield');
+              const rect=bf.getBoundingClientRect();
+              const size=qolBattlefieldCardSize();
+              const x=Math.max(0,e.clientX-rect.left-grabRatioX*size.width+bf.scrollLeft);
+              const y=Math.max(0,e.clientY-rect.top-grabRatioY*size.height+bf.scrollTop);
+              moveCard(id,'battlefield',{x,y,checkpoint:false});
+            }
+          } else if(targetZone==='library') moveCard(id,'library',{placement:'top',checkpoint:false});
+          else moveCard(id,targetZone,{checkpoint:false});
+        } else if(originZone==='battlefield'){
+          const anchorId=stackAnchorId(id);
+          const wasStacked=!!card(id)?.autoStackAnchor || stackMembers(anchorId).length>1;
+          if(wasStacked){detachFromStack(id);render();}
+          scheduleSave();
+        } else {
+          history.pop();
+          render();
+        }
+      };
+
+      el.addEventListener('pointerdown',e=>{
+        if(e.button!==0||pointerId!==null)return;
+        pointerId=e.pointerId;
+        startX=e.clientX;
+        startY=e.clientY;
+        const rect=el.getBoundingClientRect();
+        sourceWidth=Math.max(1,rect.width);
+        sourceHeight=Math.max(1,rect.height);
+        grabOffsetX=Math.max(0,Math.min(sourceWidth,e.clientX-rect.left));
+        grabOffsetY=Math.max(0,Math.min(sourceHeight,e.clientY-rect.top));
+        grabRatioX=grabOffsetX/sourceWidth;
+        grabRatioY=grabOffsetY/sourceHeight;
+
+        if(originZone==='battlefield' && e.shiftKey){
+          const anchorId=stackAnchorId(id);
+          const group=stackMembers(anchorId);
+          movingStackIds=group.length>1?group:[id];
+        } else movingStackIds=[id];
+
+        movingStackStart=new Map(movingStackIds.map(sid=>[sid,{x:Number(card(sid)?.x)||0,y:Number(card(sid)?.y)||0}]));
+        try{el.setPointerCapture(pointerId);}catch{}
+      });
+
+      el.addEventListener('pointermove',onMove);
+      el.addEventListener('pointerup',onUp);
+      el.addEventListener('pointercancel',onUp);
+      el.addEventListener('click',e=>{
+        if(Date.now()<qolSuppressCardClicksUntil){e.preventDefault();e.stopImmediatePropagation();}
+      },true);
+    };
+  })();
