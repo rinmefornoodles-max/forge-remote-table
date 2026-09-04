@@ -1,0 +1,71 @@
+
+
+  // --- Reliable Three.js loader for GitHub Pages. ---
+  // The module loader can fail in some browser/privacy configurations. Load the
+  // classic browser build instead so the randomizer does not silently fall back
+  // to the older flat CSS representation.
+  real3dThreePromise = null;
+  real3dLoadThree = function() {
+    if (window.THREE) return Promise.resolve(window.THREE);
+    if (window.__forgeRemoteThreePromise) return window.__forgeRemoteThreePromise;
+
+    window.__forgeRemoteThreePromise = new Promise((resolve, reject) => {
+      const finish = () => window.THREE ? resolve(window.THREE) : reject(new Error('Three.js loaded without a global THREE object.'));
+      const existing = document.querySelector('script[data-forge-three="true"]');
+      if (existing) {
+        if (window.THREE) return finish();
+        existing.addEventListener('load', finish, { once:true });
+        existing.addEventListener('error', () => reject(new Error('Three.js failed to load.')), { once:true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js';
+      script.async = true;
+      script.crossOrigin = 'anonymous';
+      script.referrerPolicy = 'no-referrer';
+      script.dataset.forgeThree = 'true';
+      script.addEventListener('load', finish, { once:true });
+      script.addEventListener('error', () => reject(new Error('Three.js failed to load from the 3D renderer CDN.')), { once:true });
+      document.head.appendChild(script);
+    });
+
+    return window.__forgeRemoteThreePromise;
+  };
+
+  // Make a renderer failure explicit instead of showing the old faux-3D die.
+  const real3dOriginalRoll = real3dRollDie;
+  real3dRollDie = async function(sides) {
+    try {
+      await real3dLoadThree();
+      return await real3dOriginalRoll(sides);
+    } catch (err) {
+      console.error('Forge Remote Table 3D dice renderer failed:', err);
+      luckShowModal('3D DICE', '3D renderer could not load');
+      $('#luck-stage').innerHTML = '<div class="qol-rule-box" style="max-width:360px;text-align:left"><strong>The actual 3D renderer did not load.</strong><br><br>This is no longer being disguised with the old flat die. Refresh once and try again. If it still fails, the browser or network is blocking the 3D library.</div>';
+      $('#luck-result').textContent = '';
+      $('#luck-sub').textContent = 'No roll was made.';
+      $('#random-result').textContent = '';
+      luckAction('Close','btn primary',luckClose);
+    }
+  };
+
+  const real3dOriginalQuarter = real3dFlipQuarter;
+  real3dFlipQuarter = async function() {
+    try {
+      await real3dLoadThree();
+      return await real3dOriginalQuarter();
+    } catch (err) {
+      console.error('Forge Remote Table 3D quarter renderer failed:', err);
+      luckShowModal('3D COIN', '3D renderer could not load');
+      $('#luck-stage').innerHTML = '<div class="qol-rule-box" style="max-width:360px;text-align:left"><strong>The actual 3D quarter renderer did not load.</strong><br><br>Refresh once and try again. The old flat coin is intentionally not being shown as a substitute.</div>';
+      $('#luck-result').textContent = '';
+      $('#luck-sub').textContent = 'No flip was made.';
+      $('#random-result').textContent = '';
+      luckAction('Close','btn primary',luckClose);
+    }
+  };
+
+  // Rebind the public randomizer entry points to the fixed WebGL versions.
+  luckRollDie = function(sides) { return real3dRollDie(sides); };
+  luckFlipCoin = function() { return real3dFlipQuarter(); };
