@@ -11,6 +11,7 @@
     './app-src/interaction-animations.txt',
     './app-src/randomizer-3d.txt',
     './app-src/three-loader-fix.txt',
+    './app-src/randomizer-face-art.txt',
     './app-src/part-04.txt'
   ];
 
