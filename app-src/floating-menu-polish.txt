@@ -19,36 +19,16 @@
       .forge-card-menu-zone{font-size:11px!important}
       .forge-card-menu-type{font-size:12px!important}
       .forge-card-menu-close{width:38px!important;height:38px!important;font-size:22px!important}
-      .forge-card-menu-body{
-        grid-template-columns:300px minmax(0,1fr)!important;
-        gap:22px!important;
-      }
-      .forge-card-menu-preview{
-        width:300px!important;
-        border-radius:14px!important;
-        box-shadow:0 18px 46px rgba(0,0,0,.6)!important;
-      }
+      .forge-card-menu-body{grid-template-columns:300px minmax(0,1fr)!important;gap:22px!important}
+      .forge-card-menu-preview{width:300px!important;border-radius:14px!important;box-shadow:0 18px 46px rgba(0,0,0,.6)!important}
       .forge-card-menu-preview img{image-rendering:auto}
-      .forge-card-menu-oracle{
-        max-height:190px!important;
-        padding:12px!important;
-        font-size:12.5px!important;
-        line-height:1.5!important;
-        margin-bottom:12px!important;
-      }
+      .forge-card-menu-oracle{max-height:190px!important;padding:12px!important;font-size:12.5px!important;line-height:1.5!important;margin-bottom:12px!important}
       .forge-card-menu-section{margin-top:13px!important}
       .forge-card-menu-section>strong{font-size:10px!important;margin-bottom:7px!important}
       .forge-card-menu-actions{gap:8px!important}
-      .forge-card-menu-actions button{
-        min-height:42px!important;
-        padding:9px 8px!important;
-        font-size:11px!important;
-      }
-
-      /* Zone viewers stay large, but the floating card menu must always sit above them. */
+      .forge-card-menu-actions button{min-height:42px!important;padding:9px 8px!important;font-size:11px!important}
       #zone-modal{z-index:100!important}
       #forge-card-menu{isolation:isolate}
-
       @media(max-width:1050px){
         #forge-card-menu{width:min(720px,calc(100vw - 22px))!important;padding:16px!important}
         .forge-card-menu-body{grid-template-columns:240px minmax(0,1fr)!important;gap:16px!important}
@@ -65,377 +45,230 @@
     document.head.appendChild(style);
   })();
 
-  // Directional duplicate stacking v2.
-  // The approach direction is remembered: enter a matching card from above to
-  // place the dragged card above it, or from below to place it underneath.
+  // Directional stack hard guard.
+  // Independent capture-phase tracker + post-drop enforcer. This runs after the
+  // normal drag system and reapplies the intended duplicate stack order last.
   (() => {
-    if (!document.getElementById('forge-directional-stack-v2-style')) {
+    const norm = c => String(c?.name || '').trim().toLocaleLowerCase();
+    let drag = null;
+
+    if (!document.getElementById('forge-stack-hardguard-style')) {
       const style = document.createElement('style');
-      style.id = 'forge-directional-stack-v2-style';
+      style.id = 'forge-stack-hardguard-style';
       style.textContent = `
-        .forge-stack-approach-hint{
-          position:absolute;left:5px;right:5px;z-index:220;pointer-events:none;
-          display:grid;place-items:center;height:44%;border:2px solid #f1c779;border-radius:9px;
-          background:rgba(16,31,25,.86);color:#fff4d7;font-size:11px;font-weight:950;
-          letter-spacing:.08em;text-transform:uppercase;text-shadow:0 2px 4px #000;
-          box-shadow:0 0 24px rgba(241,199,121,.35) inset,0 5px 16px rgba(0,0,0,.45)
+        .forge-stack-drop-hint,.forge-stack-approach-hint{display:none!important}
+        .forge-stack-hard-hint{
+          position:absolute;left:5px;right:5px;z-index:600;pointer-events:none;
+          display:grid;place-items:center;height:46%;border:2px solid #f1c779;border-radius:9px;
+          background:rgba(14,29,23,.90);color:#fff5dc;font-size:12px;font-weight:950;
+          letter-spacing:.06em;text-transform:uppercase;text-shadow:0 2px 4px #000;
+          box-shadow:0 0 28px rgba(241,199,121,.42) inset,0 6px 18px rgba(0,0,0,.5)
         }
-        .forge-stack-approach-hint.above{top:5px}
-        .forge-stack-approach-hint.below{bottom:5px}
+        .forge-stack-hard-hint.top{top:5px}
+        .forge-stack-hard-hint.bottom{bottom:5px}
       `;
       document.head.appendChild(style);
     }
 
-    const normName = c => String(c?.name || '').trim().toLocaleLowerCase();
-
-    function anchorIdFor(id) {
-      const c = card(id);
-      return c?.autoStackAnchor && card(c.autoStackAnchor) ? c.autoStackAnchor : id;
+    function clearHint() {
+      document.querySelectorAll('.forge-stack-hard-hint').forEach(x => x.remove());
     }
 
-    function membersOf(anchorId) {
-      if (!anchorId) return [];
-      return state.zones.battlefield.filter(sid => sid === anchorId || card(sid)?.autoStackAnchor === anchorId);
-    }
-
-    function setNodePosition(id) {
-      const c = card(id);
-      const node = document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(id)}"]`);
-      if (c && node) {
-        node.style.left = `${Number(c.x)||0}px`;
-        node.style.top = `${Number(c.y)||0}px`;
-      }
-    }
-
-    function reflow(anchorId) {
-      const anchor = card(anchorId);
-      if (!anchor || zoneOf(anchorId) !== 'battlefield') return;
-      const ids = membersOf(anchorId);
-      const baseX = Number(anchor.x)||0;
-      const baseY = Number(anchor.y)||0;
-      ids.forEach((sid,index) => {
-        const c = card(sid);
-        if (!c) return;
-        if (sid === anchorId) delete c.autoStackAnchor;
-        else c.autoStackAnchor = anchorId;
-        c.x = baseX + index * 10;
-        c.y = baseY + index * 14;
-        setNodePosition(sid);
-      });
-    }
-
-    function detachOne(id) {
-      const c = card(id);
-      if (!c || zoneOf(id) !== 'battlefield') return;
-
-      if (c.autoStackAnchor) {
-        const oldAnchor = c.autoStackAnchor;
-        delete c.autoStackAnchor;
-        reflow(oldAnchor);
-        return;
-      }
-
-      const children = state.zones.battlefield.filter(sid => card(sid)?.autoStackAnchor === id);
-      if (!children.length) return;
-
-      const baseX = Number(c.x)||0;
-      const baseY = Number(c.y)||0;
-      const nextAnchorId = children[0];
-      const nextAnchor = card(nextAnchorId);
-      if (!nextAnchor) return;
-
-      delete nextAnchor.autoStackAnchor;
-      nextAnchor.x = baseX;
-      nextAnchor.y = baseY;
-      children.slice(1).forEach(sid => {
-        const m = card(sid);
-        if (m) m.autoStackAnchor = nextAnchorId;
-      });
-      reflow(nextAnchorId);
-    }
-
-    function clearApproachHint() {
-      document.querySelectorAll('.forge-stack-approach-hint').forEach(x => x.remove());
-    }
-
-    function drawApproachHint(targetEl,direction) {
-      clearApproachHint();
+    function showHint(targetEl, direction) {
+      clearHint();
       if (!targetEl || !direction) return;
-      const hint = document.createElement('span');
-      hint.className = `forge-stack-approach-hint ${direction}`;
-      hint.textContent = direction === 'above' ? '↑ Put on top' : '↓ Put underneath';
-      targetEl.appendChild(hint);
+      const el = document.createElement('span');
+      el.className = `forge-stack-hard-hint ${direction === 'above' ? 'top' : 'bottom'}`;
+      el.textContent = direction === 'above' ? '↑ Put on top' : '↓ Put underneath';
+      targetEl.appendChild(el);
     }
 
-    function rectOverlap(a,b) {
-      const left = Math.max(a.left,b.left);
-      const right = Math.min(a.right,b.right);
-      const top = Math.max(a.top,b.top);
-      const bottom = Math.min(a.bottom,b.bottom);
-      return Math.max(0,right-left) * Math.max(0,bottom-top);
+    function overlapArea(a,b) {
+      const w = Math.max(0, Math.min(a.right,b.right) - Math.max(a.left,b.left));
+      const h = Math.max(0, Math.min(a.bottom,b.bottom) - Math.max(a.top,b.top));
+      return w*h;
     }
 
-    function currentDragRect(el,ghost,clientX,clientY,grabOffsetX,grabOffsetY,sourceWidth,sourceHeight,originZone) {
-      if (originZone === 'battlefield') return el.getBoundingClientRect();
+    function translatedRect(base, dx, dy) {
       return {
-        left:clientX-grabOffsetX,
-        top:clientY-grabOffsetY,
-        right:clientX-grabOffsetX+sourceWidth,
-        bottom:clientY-grabOffsetY+sourceHeight,
-        width:sourceWidth,
-        height:sourceHeight
+        left: base.left + dx,
+        right: base.right + dx,
+        top: base.top + dy,
+        bottom: base.bottom + dy,
+        width: base.width,
+        height: base.height
       };
     }
 
-    function matchingTargetForRect(dragRect,id,ignoredIds=[]) {
+    function bestMatchingTarget(id, rect) {
       const moving = card(id);
       if (!moving) return null;
       let best = null;
       document.querySelectorAll('#battlefield .remote-card').forEach(node => {
         const targetId = node.dataset.cardId;
-        if (!targetId || targetId === id || ignoredIds.includes(targetId)) return;
+        if (!targetId || targetId === id) return;
         const target = card(targetId);
-        if (!target || normName(target) !== normName(moving)) return;
+        if (!target || norm(target) !== norm(moving)) return;
         const r = node.getBoundingClientRect();
-        const overlap = rectOverlap(dragRect,r);
-        if (overlap <= 0) return;
-        const dragCx=(dragRect.left+dragRect.right)/2, dragCy=(dragRect.top+dragRect.bottom)/2;
-        const targetCx=(r.left+r.right)/2, targetCy=(r.top+r.bottom)/2;
-        const distance=Math.hypot(dragCx-targetCx,dragCy-targetCy);
-        const score=overlap-distance*.15;
-        if (!best || score>best.score) best={targetId,targetEl:node,rect:r,score};
+        const area = overlapArea(rect,r);
+        if (area <= 0) return;
+        const cx=(rect.left+rect.right)/2, cy=(rect.top+rect.bottom)/2;
+        const tx=(r.left+r.right)/2, ty=(r.top+r.bottom)/2;
+        const distance=Math.hypot(cx-tx,cy-ty);
+        const score=area-distance*.1;
+        if (!best || score > best.score) best={targetId,targetEl:node,rect:r,score};
       });
       return best;
     }
 
-    function placeRelative(id,targetId,direction) {
-      const moving = card(id), target = card(targetId);
-      if (!moving || !target || normName(moving)!==normName(target)) return false;
+    function anchorId(id) {
+      const c=card(id);
+      return c?.autoStackAnchor && card(c.autoStackAnchor) ? c.autoStackAnchor : id;
+    }
 
-      const targetAnchorId = anchorIdFor(targetId);
-      const targetGroup = membersOf(targetAnchorId).filter(sid => sid !== id);
-      const targetIndex = targetGroup.indexOf(targetId);
-      if (targetIndex < 0) return false;
+    function members(anchor) {
+      return state.zones.battlefield.filter(sid => sid===anchor || card(sid)?.autoStackAnchor===anchor);
+    }
 
-      const targetAnchor = card(targetAnchorId);
-      const baseX = Number(targetAnchor?.x)||0;
-      const baseY = Number(targetAnchor?.y)||0;
+    function reflow(anchor) {
+      const base=card(anchor);
+      if (!base || zoneOf(anchor)!=='battlefield') return;
+      const ids=members(anchor);
+      const x=Number(base.x)||0, y=Number(base.y)||0;
+      ids.forEach((sid,index) => {
+        const c=card(sid);
+        if (!c) return;
+        if (sid===anchor) delete c.autoStackAnchor;
+        else c.autoStackAnchor=anchor;
+        c.x=x+index*10;
+        c.y=y+index*14;
+      });
+    }
 
-      if (zoneOf(id)==='battlefield') detachOne(id);
+    function detach(id) {
+      const c=card(id);
+      if (!c || zoneOf(id)!=='battlefield') return;
+      if (c.autoStackAnchor) {
+        const old=c.autoStackAnchor;
+        delete c.autoStackAnchor;
+        reflow(old);
+        return;
+      }
+      const kids=state.zones.battlefield.filter(sid => card(sid)?.autoStackAnchor===id);
+      if (!kids.length) return;
+      const x=Number(c.x)||0, y=Number(c.y)||0;
+      const next=kids[0], nextCard=card(next);
+      if (!nextCard) return;
+      delete nextCard.autoStackAnchor;
+      nextCard.x=x; nextCard.y=y;
+      kids.slice(1).forEach(sid => { const m=card(sid); if(m) m.autoStackAnchor=next; });
+      reflow(next);
+    }
+
+    function enforce(id,targetId,direction) {
+      const moving=card(id), target=card(targetId);
+      if (!moving || !target || norm(moving)!==norm(target)) return false;
+      if (zoneOf(targetId)!=='battlefield') return false;
+
+      if (zoneOf(id)==='battlefield') detach(id);
+
+      const targetAnchor=anchorId(targetId);
+      const base=card(targetAnchor);
+      if (!base) return false;
+      const baseX=Number(base.x)||0, baseY=Number(base.y)||0;
+      const order=members(targetAnchor).filter(sid => sid!==id);
+      const targetIndex=order.indexOf(targetId);
+      if (targetIndex<0) return false;
+
       removeFromZones(id);
-
-      const order=[...targetGroup];
-      const insertAt = direction==='above' ? targetIndex+1 : targetIndex;
+      const insertAt=direction==='above' ? targetIndex+1 : targetIndex;
       order.splice(insertAt,0,id);
       const unique=[...new Set(order)].filter(sid => !!card(sid));
 
-      state.zones.battlefield = state.zones.battlefield.filter(sid => !unique.includes(sid));
+      state.zones.battlefield=state.zones.battlefield.filter(sid => !unique.includes(sid));
       state.zones.battlefield.push(...unique);
 
-      const newAnchorId=unique[0];
+      const newAnchor=unique[0];
       unique.forEach((sid,index) => {
         const c=card(sid);
         if (!c) return;
-        if (sid===newAnchorId) delete c.autoStackAnchor;
-        else c.autoStackAnchor=newAnchorId;
+        if (sid===newAnchor) delete c.autoStackAnchor;
+        else c.autoStackAnchor=newAnchor;
         c.x=baseX+index*10;
         c.y=baseY+index*14;
       });
 
-      logEvent(`${moving.name}: placed ${direction==='above'?'on top of':'under'} matching permanent.`);
+      logEvent(`${moving.name}: put ${direction==='above'?'on top of':'underneath'} matching card.`);
       render();
       scheduleSave();
       return true;
     }
 
-    qolEnablePointerDrag = function(el,id,originZone) {
-      if (!el || !['battlefield','hand','command'].includes(originZone)) return;
-      el.draggable=false;
-      el.style.touchAction='none';
-
-      let pointerId=null,startX=0,startY=0,dragging=false,ghost=null,lastDropZone=null;
-      let grabOffsetX=0,grabOffsetY=0,grabRatioX=.5,grabRatioY=.5,sourceWidth=1,sourceHeight=1;
-      let movingStackIds=[id],movingStackStart=new Map(),approachTargetId=null,approachDirection=null;
-      let previousCenterY=null;
-
-      const cleanup=()=>{
-        draggedId=null;
-        document.body.classList.remove('qol-drag-mode');
-        el.classList.remove('qol-dragging-card');
-        lastDropZone?.classList.remove('drag-over');
-        lastDropZone=null;
-        ghost?.remove();
-        ghost=null;
-        clearApproachHint();
+    document.addEventListener('pointerdown', e => {
+      if (e.button!==0) return;
+      const el=e.target.closest?.('.remote-card');
+      const id=el?.dataset.cardId;
+      if (!id || !card(id)) return;
+      const origin=zoneOf(id);
+      if (!['hand','battlefield','command'].includes(origin)) return;
+      const rect=el.getBoundingClientRect();
+      drag={
+        pointerId:e.pointerId,id,origin,el,
+        startX:e.clientX,startY:e.clientY,
+        baseRect:{left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,width:rect.width,height:rect.height},
+        active:false,lastCenterY:(rect.top+rect.bottom)/2,targetId:null,direction:null
       };
+    }, true);
 
-      const positionGhost=(x,y)=>{
-        if (!ghost) return;
-        ghost.style.left=`${x-grabOffsetX}px`;
-        ghost.style.top=`${y-grabOffsetY}px`;
-      };
+    document.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId!==drag.pointerId) return;
+      const dx=e.clientX-drag.startX, dy=e.clientY-drag.startY;
+      if (!drag.active && Math.hypot(dx,dy)<7) return;
+      drag.active=true;
 
-      const onMove=e=>{
-        if (pointerId!==e.pointerId) return;
-        const dx=e.clientX-startX,dy=e.clientY-startY;
-        if (!dragging && Math.hypot(dx,dy)<7) return;
+      const rect=translatedRect(drag.baseRect,dx,dy);
+      const candidate=bestMatchingTarget(drag.id,rect);
+      const centerY=(rect.top+rect.bottom)/2;
 
-        if (!dragging) {
-          dragging=true;
-          checkpoint();
-          draggedId=id;
-          document.body.classList.add('qol-drag-mode');
-          el.classList.add('qol-dragging-card');
-
-          if (originZone==='battlefield' && movingStackIds.length===1) {
-            detachOne(id);
-            const c=card(id);
-            movingStackStart=new Map([[id,{x:Number(c?.x)||0,y:Number(c?.y)||0}]]);
-          }
-
-          if (originZone!=='battlefield') {
-            ghost=el.cloneNode(true);
-            ghost.className='qol-drag-ghost';
-            ghost.removeAttribute('style');
-            ghost.style.width=`${sourceWidth}px`;
-            ghost.style.height=`${sourceHeight}px`;
-            ghost.style.transform='none';
-            ghost.style.pointerEvents='none';
-            document.body.appendChild(ghost);
-            positionGhost(e.clientX,e.clientY);
-          }
+      if (candidate) {
+        if (candidate.targetId!==drag.targetId) {
+          const targetCenter=(candidate.rect.top+candidate.rect.bottom)/2;
+          if (drag.lastCenterY < candidate.rect.top + candidate.rect.height*.35) drag.direction='above';
+          else if (drag.lastCenterY > candidate.rect.bottom - candidate.rect.height*.35) drag.direction='below';
+          else if (dy>0) drag.direction='above';
+          else if (dy<0) drag.direction='below';
+          else drag.direction=drag.lastCenterY<=targetCenter?'above':'below';
+          drag.targetId=candidate.targetId;
         }
+        showHint(candidate.targetEl,drag.direction);
+      } else {
+        drag.targetId=null;
+        drag.direction=null;
+        clearHint();
+      }
+      drag.lastCenterY=centerY;
+    }, true);
 
-        e.preventDefault();
+    document.addEventListener('pointerup', e => {
+      if (!drag || e.pointerId!==drag.pointerId) return;
+      const current=drag;
+      drag=null;
+      clearHint();
+      if (!current.active || !current.targetId || !current.direction) return;
 
-        if (originZone==='battlefield') {
-          movingStackIds.forEach(sid => {
-            const c=card(sid), start=movingStackStart.get(sid);
-            if (!c || !start) return;
-            c.x=Math.max(0,start.x+dx);
-            c.y=Math.max(0,start.y+dy);
-            setNodePosition(sid);
-          });
-        } else positionGhost(e.clientX,e.clientY);
+      const dx=e.clientX-current.startX, dy=e.clientY-current.startY;
+      const rect=translatedRect(current.baseRect,dx,dy);
+      const candidate=bestMatchingTarget(current.id,rect);
+      const targetId=candidate?.targetId || current.targetId;
+      const direction=current.direction;
 
-        const dropZone=qolDropTargetAt(e.clientX,e.clientY,el);
-        if (lastDropZone!==dropZone) {
-          lastDropZone?.classList.remove('drag-over');
-          dropZone?.classList.add('drag-over');
-          lastDropZone=dropZone;
-        }
+      setTimeout(() => {
+        if (!card(current.id) || !card(targetId)) return;
+        enforce(current.id,targetId,direction);
+      },0);
+    }, true);
 
-        if (movingStackIds.length===1) {
-          const dragRect=currentDragRect(el,ghost,e.clientX,e.clientY,grabOffsetX,grabOffsetY,sourceWidth,sourceHeight,originZone);
-          const candidate=matchingTargetForRect(dragRect,id,movingStackIds);
-          const centerY=(dragRect.top+dragRect.bottom)/2;
-
-          if (candidate) {
-            if (candidate.targetId!==approachTargetId) {
-              approachTargetId=candidate.targetId;
-              const targetCenterY=(candidate.rect.top+candidate.rect.bottom)/2;
-              const referenceY=previousCenterY ?? centerY;
-              approachDirection=referenceY<=targetCenterY?'above':'below';
-            }
-            drawApproachHint(candidate.targetEl,approachDirection);
-          } else {
-            approachTargetId=null;
-            approachDirection=null;
-            clearApproachHint();
-          }
-          previousCenterY=centerY;
-        }
-      };
-
-      const onUp=e=>{
-        if (pointerId!==e.pointerId) return;
-        try{el.releasePointerCapture(pointerId);}catch{}
-        if (!dragging) { pointerId=null; clearApproachHint(); return; }
-
-        qolSuppressCardClicksUntil=Date.now()+420;
-        const dragRect=currentDragRect(el,ghost,e.clientX,e.clientY,grabOffsetX,grabOffsetY,sourceWidth,sourceHeight,originZone);
-        const candidate=movingStackIds.length===1 ? matchingTargetForRect(dragRect,id,movingStackIds) : null;
-        const target=qolDropTargetAt(e.clientX,e.clientY,el);
-        const targetZone=target?.dataset.dropZone;
-        const origin=zoneOf(id);
-        const wholeStackIds=[...movingStackIds];
-        const direction=(candidate?.targetId===approachTargetId && approachDirection) ? approachDirection : approachDirection;
-
-        cleanup();
-        pointerId=null;
-
-        if (candidate && direction && targetZone==='battlefield') {
-          placeRelative(id,candidate.targetId,direction);
-          return;
-        }
-
-        if (movingStackIds.length>1) {
-          if (targetZone==='battlefield' || (!targetZone && originZone==='battlefield')) {
-            logEvent(`${card(id)?.name||'Stack'}: stack repositioned.`);
-            scheduleSave();
-          } else if (targetZone) {
-            wholeStackIds.forEach(sid => moveCard(sid,targetZone==='library'?'library':targetZone,targetZone==='library'?{placement:'top',checkpoint:false}:{checkpoint:false}));
-          } else {
-            history.pop();
-            render();
-          }
-          return;
-        }
-
-        if (targetZone) {
-          if (targetZone==='battlefield') {
-            if (origin==='battlefield') {
-              logEvent(`${card(id)?.name||'Card'}: repositioned on battlefield.`);
-              scheduleSave();
-            } else {
-              const bf=$('#battlefield'),rect=bf.getBoundingClientRect(),size=qolBattlefieldCardSize();
-              const x=Math.max(0,e.clientX-rect.left-grabRatioX*size.width+bf.scrollLeft);
-              const y=Math.max(0,e.clientY-rect.top-grabRatioY*size.height+bf.scrollTop);
-              moveCard(id,'battlefield',{x,y,checkpoint:false});
-            }
-          } else if (targetZone==='library') moveCard(id,'library',{placement:'top',checkpoint:false});
-          else moveCard(id,targetZone,{checkpoint:false});
-        } else if (originZone==='battlefield') {
-          scheduleSave();
-        } else {
-          history.pop();
-          render();
-        }
-      };
-
-      el.addEventListener('pointerdown',e=>{
-        if (e.button!==0 || pointerId!==null) return;
-        pointerId=e.pointerId;
-        startX=e.clientX;
-        startY=e.clientY;
-        const rect=el.getBoundingClientRect();
-        sourceWidth=Math.max(1,rect.width);
-        sourceHeight=Math.max(1,rect.height);
-        grabOffsetX=Math.max(0,Math.min(sourceWidth,e.clientX-rect.left));
-        grabOffsetY=Math.max(0,Math.min(sourceHeight,e.clientY-rect.top));
-        grabRatioX=grabOffsetX/sourceWidth;
-        grabRatioY=grabOffsetY/sourceHeight;
-
-        if (originZone==='battlefield' && e.shiftKey) {
-          const group=membersOf(anchorIdFor(id));
-          movingStackIds=group.length>1?group:[id];
-        } else movingStackIds=[id];
-
-        movingStackStart=new Map(movingStackIds.map(sid=>[sid,{x:Number(card(sid)?.x)||0,y:Number(card(sid)?.y)||0}]));
-        approachTargetId=null;
-        approachDirection=null;
-        previousCenterY=(rect.top+rect.bottom)/2;
-        try{el.setPointerCapture(pointerId);}catch{}
-      });
-
-      el.addEventListener('pointermove',onMove);
-      el.addEventListener('pointerup',onUp);
-      el.addEventListener('pointercancel',onUp);
-      el.addEventListener('click',e=>{
-        if (Date.now()<qolSuppressCardClicksUntil) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-        }
-      },true);
-    };
+    document.addEventListener('pointercancel', e => {
+      if (drag && e.pointerId===drag.pointerId) { drag=null; clearHint(); }
+    }, true);
   })();
