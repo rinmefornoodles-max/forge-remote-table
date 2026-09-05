@@ -1,0 +1,68 @@
+
+
+  // Freeze Look at top N to the cards that were actually revealed.
+  // Moving one of those cards away/bottoming it removes it from this viewer,
+  // but never pulls a new card in from deeper in the library.
+  (() => {
+    let forgeTopNSnapshot = null;
+
+    openZone = function(zone, title=null, limit=null) {
+      zoneModalZone = zone;
+      zoneModalLimit = Number.isFinite(limit) ? limit : null;
+      forgeTopNSnapshot = zone === 'library' && zoneModalLimit
+        ? { zone, ids: state.zones.library.slice(0, zoneModalLimit), limit: zoneModalLimit }
+        : null;
+      $('#zone-modal-title').textContent = title || zone[0].toUpperCase()+zone.slice(1);
+      $('#zone-search').value = '';
+      renderZoneModal();
+      openModal('zone-modal');
+    };
+
+    renderZoneModal = function() {
+      const zone = zoneModalZone;
+      if (!zone || !state.zones[zone]) return;
+
+      const query = $('#zone-search').value.trim().toLocaleLowerCase();
+      let ids;
+      let originalIndex = null;
+
+      if (forgeTopNSnapshot && zone === forgeTopNSnapshot.zone && zoneModalLimit) {
+        const currentTop = new Set(state.zones.library.slice(0, forgeTopNSnapshot.limit));
+        ids = forgeTopNSnapshot.ids.filter(id => currentTop.has(id) && card(id));
+        originalIndex = new Map(forgeTopNSnapshot.ids.map((id,index) => [id,index+1]));
+      } else {
+        ids = zoneModalLimit ? state.zones[zone].slice(0, zoneModalLimit) : state.zones[zone];
+      }
+
+      const grid = $('#zone-card-grid');
+      grid.innerHTML = '';
+      const tools = $('#zone-modal-tools');
+      tools.innerHTML = '';
+
+      if (zone === 'library') {
+        tools.innerHTML = '<button class="btn tiny" data-zone-tool="shuffle">Shuffle</button><button class="btn tiny ghost" data-zone-tool="draw">Draw 1</button><span class="muted-block">Top of library is first.</span>';
+      }
+
+      ids.forEach((id,index) => {
+        const c = card(id);
+        if (!c || (query && !`${c.name} ${c.typeLine} ${c.oracleText}`.toLocaleLowerCase().includes(query))) return;
+        const tile = document.createElement('div');
+        tile.className = 'zone-tile';
+        const ce = makeCardElement(id,zone,{preview:false});
+        ce.style.width = '100%';
+        ce.style.height = 'auto';
+        ce.style.aspectRatio = '488/680';
+        tile.appendChild(ce);
+        const ix = document.createElement('div');
+        ix.className = 'zone-index';
+        const position = originalIndex?.get(id) || index + 1;
+        ix.textContent = zone === 'library' ? `#${position} from revealed top ${zoneModalLimit || ids.length}` : zone;
+        tile.appendChild(ix);
+        grid.appendChild(tile);
+      });
+
+      if (!grid.children.length) {
+        grid.innerHTML = '<p class="muted-block">No cards from the original revealed set remain on top.</p>';
+      }
+    };
+  })();
