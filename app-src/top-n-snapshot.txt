@@ -1,68 +1,130 @@
 
 
-  // Freeze Look at top N to the cards that were actually revealed.
-  // Moving one of those cards away/bottoming it removes it from this viewer,
-  // but never pulls a new card in from deeper in the library.
+  // Strictly freeze "Look at top N" to the exact cards revealed when opened.
+  // That reveal set may only shrink while the viewer stays open. If one of the
+  // revealed cards is bottomed, exiled, drawn, or moved elsewhere, it disappears
+  // from this viewer and NO deeper library card is allowed to replace it.
   (() => {
     let forgeTopNSnapshot = null;
+    let enforcingSnapshotDom = false;
 
+    function snapshotIsActive() {
+      return !!(forgeTopNSnapshot && zoneModalZone === 'library' && zoneModalLimit);
+    }
+
+    function visibleSnapshotIds() {
+      if (!snapshotIsActive()) return [];
+      const limit = forgeTopNSnapshot.limit;
+      return forgeTopNSnapshot.ids.filter(id => {
+        if (!card(id)) return false;
+        const libraryIndex = state.zones.library.indexOf(id);
+        return libraryIndex >= 0 && libraryIndex < limit;
+      });
+    }
+
+    function enforceSnapshotDom() {
+      if (!snapshotIsActive() || enforcingSnapshotDom) return;
+      const grid = $('#zone-card-grid');
+      if (!grid) return;
+
+      enforcingSnapshotDom = true;
+      try {
+        const allowed = new Set(forgeTopNSnapshot.ids);
+        grid.querySelectorAll('.zone-tile').forEach(tile => {
+          const id = tile.querySelector('.remote-card')?.dataset.cardId;
+          if (id && !allowed.has(id)) tile.remove();
+        });
+      } finally {
+        enforcingSnapshotDom = false;
+      }
+    }
+
+    const forgeTopNBaseOpenZone = openZone;
     openZone = function(zone, title=null, limit=null) {
+      const numericLimit = Number.isFinite(limit) ? limit : null;
+
+      if (zone === 'library' && numericLimit) {
+        forgeTopNSnapshot = {
+          zone: 'library',
+          limit: numericLimit,
+          ids: state.zones.library.slice(0, numericLimit)
+        };
+      } else {
+        forgeTopNSnapshot = null;
+      }
+
+      // Keep normal modal setup, but our render override below is authoritative.
       zoneModalZone = zone;
-      zoneModalLimit = Number.isFinite(limit) ? limit : null;
-      forgeTopNSnapshot = zone === 'library' && zoneModalLimit
-        ? { zone, ids: state.zones.library.slice(0, zoneModalLimit), limit: zoneModalLimit }
-        : null;
+      zoneModalLimit = numericLimit;
       $('#zone-modal-title').textContent = title || zone[0].toUpperCase()+zone.slice(1);
       $('#zone-search').value = '';
       renderZoneModal();
       openModal('zone-modal');
+      requestAnimationFrame(enforceSnapshotDom);
     };
 
+    const forgeTopNBaseRenderZoneModal = renderZoneModal;
     renderZoneModal = function() {
       const zone = zoneModalZone;
       if (!zone || !state.zones[zone]) return;
 
-      const query = $('#zone-search').value.trim().toLocaleLowerCase();
-      let ids;
-      let originalIndex = null;
-
-      if (forgeTopNSnapshot && zone === forgeTopNSnapshot.zone && zoneModalLimit) {
-        const currentTop = new Set(state.zones.library.slice(0, forgeTopNSnapshot.limit));
-        ids = forgeTopNSnapshot.ids.filter(id => currentTop.has(id) && card(id));
-        originalIndex = new Map(forgeTopNSnapshot.ids.map((id,index) => [id,index+1]));
-      } else {
-        ids = zoneModalLimit ? state.zones[zone].slice(0, zoneModalLimit) : state.zones[zone];
+      if (!snapshotIsActive()) {
+        forgeTopNBaseRenderZoneModal();
+        return;
       }
 
+      const query = $('#zone-search').value.trim().toLocaleLowerCase();
+      const ids = visibleSnapshotIds();
+      const originalIndex = new Map(forgeTopNSnapshot.ids.map((id,index) => [id,index+1]));
       const grid = $('#zone-card-grid');
-      grid.innerHTML = '';
       const tools = $('#zone-modal-tools');
+      grid.innerHTML = '';
       tools.innerHTML = '';
 
-      if (zone === 'library') {
-        tools.innerHTML = '<button class="btn tiny" data-zone-tool="shuffle">Shuffle</button><button class="btn tiny ghost" data-zone-tool="draw">Draw 1</button><span class="muted-block">Top of library is first.</span>';
-      }
+      // Looking at a fixed reveal should not expose a changing live-library list.
+      tools.innerHTML = `<span class="muted-block">Showing only the original top ${forgeTopNSnapshot.limit}. Moving a revealed card away will not reveal a replacement.</span>`;
 
-      ids.forEach((id,index) => {
+      for (const id of ids) {
         const c = card(id);
-        if (!c || (query && !`${c.name} ${c.typeLine} ${c.oracleText}`.toLocaleLowerCase().includes(query))) return;
+        if (!c) continue;
+        if (query && !`${c.name} ${c.typeLine} ${c.oracleText}`.toLocaleLowerCase().includes(query)) continue;
+
         const tile = document.createElement('div');
         tile.className = 'zone-tile';
-        const ce = makeCardElement(id,zone,{preview:false});
+        tile.dataset.forgeTopNSnapshot = '1';
+
+        const ce = makeCardElement(id,'library',{preview:false});
         ce.style.width = '100%';
         ce.style.height = 'auto';
         ce.style.aspectRatio = '488/680';
         tile.appendChild(ce);
+
         const ix = document.createElement('div');
         ix.className = 'zone-index';
-        const position = originalIndex?.get(id) || index + 1;
-        ix.textContent = zone === 'library' ? `#${position} from revealed top ${zoneModalLimit || ids.length}` : zone;
+        ix.textContent = `#${originalIndex.get(id)} of original top ${forgeTopNSnapshot.limit}`;
         tile.appendChild(ix);
         grid.appendChild(tile);
-      });
+      }
 
       if (!grid.children.length) {
-        grid.innerHTML = '<p class="muted-block">No cards from the original revealed set remain on top.</p>';
+        grid.innerHTML = `<p class="muted-block">None of the original top ${forgeTopNSnapshot.limit} cards remain in the revealed group.</p>`;
       }
+
+      requestAnimationFrame(enforceSnapshotDom);
     };
+
+    // Hard guard: if any other UI path repaints the zone modal with the live top
+    // of library, remove cards that were not in the original reveal set.
+    const zoneModal = document.getElementById('zone-modal');
+    if (zoneModal) {
+      new MutationObserver(() => {
+        if (snapshotIsActive()) requestAnimationFrame(enforceSnapshotDom);
+      }).observe(zoneModal, {childList:true, subtree:true});
+    }
+
+    // Once the Top-N viewer is closed, the next open gets a brand-new snapshot.
+    document.addEventListener('click', e => {
+      const close = e.target.closest?.('[data-close-modal="zone-modal"]');
+      if (close) forgeTopNSnapshot = null;
+    }, true);
   })();
