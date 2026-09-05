@@ -21,6 +21,7 @@
     './app-src/stack-move-handle.txt',
     './app-src/floating-card-menu.txt',
     './app-src/floating-menu-polish.txt',
+    './app-src/top-n-snapshot.txt',
     './app-src/part-04.txt'
   ];
 
