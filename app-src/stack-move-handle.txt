@@ -1,65 +1,58 @@
 
 
-  // Explicit whole-stack move handle.
-  // Hover the bottom/anchor card of a stack to reveal a button. Holding that
-  // button moves every card in the stack together without changing its order.
+  // Explicit whole-stack move handle on the FRONT/TOP card.
+  // Hover the visible top card of a stack to reveal a small control at its
+  // top-right corner. Hold that control to move the entire stack together.
   (() => {
     const HANDLE_CLASS = 'forge-stack-move-handle';
+    const TOP_CLASS = 'forge-stack-move-top';
     let activeDrag = null;
-    let revealedAnchorId = null;
 
     if (!document.getElementById('forge-stack-move-handle-style')) {
       const style = document.createElement('style');
       style.id = 'forge-stack-move-handle-style';
       style.textContent = `
-        #battlefield .remote-card.forge-stack-move-anchor {
+        #battlefield .remote-card.${TOP_CLASS} {
           overflow:visible!important;
-        }
-        #battlefield .remote-card.forge-stack-move-anchor.forge-stack-move-ready,
-        #battlefield .remote-card.forge-stack-move-anchor.forge-stack-move-active {
-          z-index:940!important;
-          filter:brightness(1.04);
         }
         #battlefield .forge-stack-move-handle {
           position:absolute;
-          left:50%;
-          top:50%;
-          z-index:950;
-          transform:translate(-50%,-50%) scale(.94);
-          min-width:112px;
-          min-height:40px;
-          padding:9px 12px;
-          border:1px solid rgba(241,199,121,.9);
+          right:-10px;
+          top:-10px;
+          z-index:1600;
+          min-width:34px;
+          min-height:34px;
+          padding:7px 9px;
+          border:1px solid rgba(241,199,121,.92);
           border-radius:10px;
           background:rgba(12,20,17,.97);
           color:#fff3d6;
-          box-shadow:0 12px 34px rgba(0,0,0,.68),0 0 0 1px rgba(255,255,255,.06) inset;
+          box-shadow:0 10px 28px rgba(0,0,0,.68),0 0 0 1px rgba(255,255,255,.06) inset;
           font-size:11px;
           font-weight:900;
-          letter-spacing:.035em;
+          line-height:1;
           white-space:nowrap;
           opacity:0;
+          transform:translate(5px,-5px) scale(.92);
           pointer-events:none;
           cursor:grab;
-          transition:opacity .14s ease,transform .16s cubic-bezier(.2,.78,.22,1),background .14s ease;
           touch-action:none;
           user-select:none;
+          transition:opacity .14s ease,transform .16s cubic-bezier(.2,.78,.22,1),background .14s ease;
         }
-        #battlefield .remote-card.forge-stack-move-anchor:hover > .forge-stack-move-handle,
-        #battlefield .remote-card.forge-stack-move-anchor.forge-stack-move-ready > .forge-stack-move-handle,
-        #battlefield .remote-card.forge-stack-move-anchor.forge-stack-move-active > .forge-stack-move-handle,
+        #battlefield .remote-card.${TOP_CLASS}:hover > .forge-stack-move-handle,
         #battlefield .forge-stack-move-handle:focus-visible,
         #battlefield .forge-stack-move-handle.is-dragging {
           opacity:1;
           pointer-events:auto;
-          transform:translate(-50%,-50%) scale(1);
+          transform:translate(0,0) scale(1);
         }
         #battlefield .forge-stack-move-handle:hover {
-          background:rgba(35,48,40,.99);
+          background:rgba(39,52,43,.99);
         }
         #battlefield .forge-stack-move-handle.is-dragging {
           cursor:grabbing;
-          background:rgba(50,55,38,.99);
+          background:rgba(55,58,38,.99);
         }
         #battlefield .remote-card.forge-stack-moving-member {
           transition:none!important;
@@ -81,15 +74,8 @@
       return document.querySelector(`#battlefield .remote-card[data-card-id="${CSS.escape(id)}"]`);
     }
 
-    function setReadyAnchor(anchorId) {
-      if (revealedAnchorId && revealedAnchorId !== anchorId) {
-        nodeFor(revealedAnchorId)?.classList.remove('forge-stack-move-ready');
-      }
-      revealedAnchorId = anchorId || null;
-      if (revealedAnchorId) nodeFor(revealedAnchorId)?.classList.add('forge-stack-move-ready');
-    }
-
     function resetTemporaryVisuals(ids) {
+      // Cancel insertion-preview offsets before a whole-stack drag starts.
       document.querySelectorAll('#battlefield .remote-card.forge-stack-insert-target').forEach(node => {
         const id = node.dataset.cardId;
         const c = card(id);
@@ -100,6 +86,8 @@
         }
       });
 
+      // Collapse temporary hover-peel positions so the whole stack starts from
+      // its actual saved coordinates.
       for (const id of ids) {
         const c = card(id);
         const node = nodeFor(id);
@@ -112,32 +100,34 @@
 
     function decorateStackHandles() {
       const battlefield = document.getElementById('battlefield');
-      if (!battlefield) return;
+      if (!battlefield || activeDrag) return;
 
       battlefield.querySelectorAll(`.${HANDLE_CLASS}`).forEach(handle => handle.remove());
-      battlefield.querySelectorAll('.remote-card.forge-stack-move-anchor').forEach(node => {
-        node.classList.remove('forge-stack-move-anchor','forge-stack-move-ready','forge-stack-move-active');
-      });
-      revealedAnchorId = null;
+      battlefield.querySelectorAll(`.remote-card.${TOP_CLASS}`).forEach(node => node.classList.remove(TOP_CLASS));
 
       for (const anchorId of state.zones.battlefield) {
         const anchor = card(anchorId);
         if (!anchor || anchor.autoStackAnchor) continue;
+
         const ids = stackMembers(anchorId);
         if (ids.length < 2) continue;
 
-        const node = nodeFor(anchorId);
-        if (!node) continue;
-        node.classList.add('forge-stack-move-anchor');
+        // Stack order is bottom -> top, so the final member is the front card.
+        const topId = ids[ids.length - 1];
+        const topNode = nodeFor(topId);
+        if (!topNode) continue;
+
+        topNode.classList.add(TOP_CLASS);
 
         const button = document.createElement('button');
         button.type = 'button';
         button.className = HANDLE_CLASS;
         button.dataset.stackAnchor = anchorId;
+        button.dataset.stackTop = topId;
         button.setAttribute('aria-label', `Move entire stack of ${ids.length} cards`);
         button.title = `Hold and drag to move all ${ids.length} cards`;
-        button.textContent = `✥ Move stack ×${ids.length}`;
-        node.appendChild(button);
+        button.textContent = `✥ Move stack`;
+        topNode.appendChild(button);
       }
     }
 
@@ -149,25 +139,6 @@
 
     requestAnimationFrame(decorateStackHandles);
 
-    // Track the bottom card from the original pointer target before the hover-peel
-    // animation has a chance to move it. Once found, keep it above its siblings
-    // so the move button cannot be hidden by the rest of the stack.
-    document.addEventListener('pointermove', event => {
-      if (activeDrag) return;
-      const el = event.target.closest?.('#battlefield .remote-card');
-      const id = el?.dataset.cardId;
-      const c = id ? card(id) : null;
-      if (id && c && !c.autoStackAnchor && stackMembers(id).length >= 2) {
-        setReadyAnchor(id);
-      } else {
-        setReadyAnchor(null);
-      }
-    }, true);
-
-    document.getElementById('battlefield')?.addEventListener('pointerleave', () => {
-      if (!activeDrag) setReadyAnchor(null);
-    });
-
     function finishStackDrag(cancelled = false) {
       const drag = activeDrag;
       if (!drag) return;
@@ -175,19 +146,18 @@
 
       document.body.classList.remove('forge-moving-stack');
       drag.handle?.classList.remove('is-dragging');
-      nodeFor(drag.anchorId)?.classList.remove('forge-stack-move-active');
       for (const id of drag.ids) nodeFor(id)?.classList.remove('forge-stack-moving-member');
 
       if (drag.active && !cancelled) {
         logEvent(`Moved stack of ${drag.ids.length} cards.`);
         scheduleSave();
       }
-      setReadyAnchor(null);
+
       decorateStackHandles();
     }
 
-    // Window capture fires before the normal document/card drag handlers. This
-    // keeps the stack button from accidentally starting an individual-card drag.
+    // Capture before normal card-drag handlers so using the button never starts
+    // an individual-card move.
     window.addEventListener('pointerdown', event => {
       const handle = event.target.closest?.(`.${HANDLE_CLASS}`);
       if (!handle || event.button !== 0) return;
@@ -199,8 +169,6 @@
       event.preventDefault();
       event.stopImmediatePropagation();
       resetTemporaryVisuals(ids);
-      setReadyAnchor(anchorId);
-      nodeFor(anchorId)?.classList.add('forge-stack-move-active');
 
       const starts = new Map();
       for (const id of ids) {
@@ -239,8 +207,9 @@
         for (const id of drag.ids) nodeFor(id)?.classList.add('forge-stack-moving-member');
       }
 
-      const minStartX = Math.min(...[...drag.starts.values()].map(p => p.x));
-      const minStartY = Math.min(...[...drag.starts.values()].map(p => p.y));
+      const starts = [...drag.starts.values()];
+      const minStartX = Math.min(...starts.map(p => p.x));
+      const minStartY = Math.min(...starts.map(p => p.y));
       dx = Math.max(dx,4-minStartX);
       dy = Math.max(dy,4-minStartY);
 
@@ -249,6 +218,7 @@
         const start = drag.starts.get(id);
         const node = nodeFor(id);
         if (!c || !start) continue;
+
         c.x = start.x + dx;
         c.y = start.y + dy;
         if (node) {
