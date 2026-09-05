@@ -1,0 +1,220 @@
+
+
+  // Robust Scryfall card-name recognition and saved-table repair.
+  // Handles common typos/diacritics, then falls back to a scored Scryfall
+  // name search so real cards do not silently become blank fallback objects.
+  (() => {
+    const SCRYFALL_SEARCH = 'https://api.scryfall.com/cards/search';
+    const forgeBaseFetchScryfallCards = fetchScryfallCards;
+    const forgeBaseNormalizeLoadedState = normalizeLoadedState;
+    const forgeBaseMoveCommanderOutOfLibrary = moveCommanderOutOfLibrary;
+    let forgeRepairPromise = null;
+
+    function forgeCardLookupKey(value) {
+      return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[Ææ]/g, m => m === 'Æ' ? 'AE' : 'ae')
+        .replace(/[Œœ]/g, m => m === 'Œ' ? 'OE' : 'oe')
+        .replace(/[’‘`]/g, "'")
+        .replace(/[‐‑‒–—]/g, '-')
+        .toLocaleLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+    }
+
+    const forgeCardAliases = new Map([
+      ['calvary pegasus', 'Cavalry Pegasus'],
+      ['eomer king of rohan', 'Éomer, King of Rohan']
+    ]);
+
+    function forgeAliasForCardName(name) {
+      return forgeCardAliases.get(forgeCardLookupKey(name)) || String(name || '').trim();
+    }
+
+    function forgeLevenshtein(a, b) {
+      const left = forgeCardLookupKey(a);
+      const right = forgeCardLookupKey(b);
+      if (left === right) return 0;
+      if (!left) return right.length;
+      if (!right) return left.length;
+      const prev = Array.from({length:right.length + 1}, (_,i) => i);
+      const curr = new Array(right.length + 1);
+      for (let i=1;i<=left.length;i++) {
+        curr[0] = i;
+        for (let j=1;j<=right.length;j++) {
+          curr[j] = Math.min(
+            curr[j-1] + 1,
+            prev[j] + 1,
+            prev[j-1] + (left[i-1] === right[j-1] ? 0 : 1)
+          );
+        }
+        for (let j=0;j<=right.length;j++) prev[j] = curr[j];
+      }
+      return prev[right.length];
+    }
+
+    function forgeFindResolvedData(map, name) {
+      if (!map || !name) return null;
+      const lower = String(name).toLocaleLowerCase();
+      const direct = map.get(lower);
+      if (direct) return direct;
+      const wantedKey = forgeCardLookupKey(name);
+      for (const item of new Set(map.values())) {
+        if (item?.name && forgeCardLookupKey(item.name) === wantedKey) return item;
+      }
+      return null;
+    }
+
+    async function forgeNamedFuzzy(name) {
+      if (!name) return null;
+      try {
+        const res = await fetch(`${SCRYFALL_NAMED}?fuzzy=${encodeURIComponent(name)}`);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
+    }
+
+    async function forgeSearchByNameWord(wanted) {
+      const wantedKey = forgeCardLookupKey(wanted);
+      const words = [...new Set(wantedKey.split(' ').filter(word => word.length >= 4))]
+        .sort((a,b) => b.length - a.length);
+      let best = null;
+
+      for (const word of words) {
+        try {
+          const query = `name:${word}`;
+          const res = await fetch(`${SCRYFALL_SEARCH}?q=${encodeURIComponent(query)}&unique=cards&order=name`);
+          if (!res.ok) continue;
+          const payload = await res.json();
+          for (const item of payload.data || []) {
+            if (!item?.name) continue;
+            const distance = forgeLevenshtein(wanted, item.name);
+            const maxLen = Math.max(wantedKey.length, forgeCardLookupKey(item.name).length, 1);
+            const ratio = distance / maxLen;
+            if (!best || ratio < best.ratio || (ratio === best.ratio && distance < best.distance)) {
+              best = { item, distance, ratio };
+            }
+          }
+        } catch {}
+
+        if (best && (best.distance <= 2 || best.ratio <= 0.16)) break;
+      }
+
+      if (!best) return null;
+      const maxAllowed = Math.max(2, Math.floor(Math.max(1,wantedKey.length) * 0.28));
+      return best.distance <= maxAllowed || best.ratio <= 0.28 ? best.item : null;
+    }
+
+    async function forgeResolveOneCardName(wanted) {
+      const alias = forgeAliasForCardName(wanted);
+      const attempts = [...new Set([alias, String(wanted || '').trim()].filter(Boolean))];
+      for (const attempt of attempts) {
+        const item = await forgeNamedFuzzy(attempt);
+        if (item) return item;
+      }
+      return forgeSearchByNameWord(wanted);
+    }
+
+    fetchScryfallCards = async function(names, statusEl=null) {
+      const requested = [...new Map((names || []).filter(Boolean).map(name => [String(name).toLocaleLowerCase(), String(name)])).values()];
+      const canonicalRequests = requested.map(forgeAliasForCardName);
+      const baseMap = await forgeBaseFetchScryfallCards(canonicalRequests, statusEl);
+      const results = new Map(baseMap);
+      const unresolved = [];
+
+      for (const wanted of requested) {
+        const alias = forgeAliasForCardName(wanted);
+        const item = forgeFindResolvedData(baseMap, alias) || forgeFindResolvedData(baseMap, wanted);
+        if (item) {
+          results.set(wanted.toLocaleLowerCase(), item);
+          results.set(item.name.toLocaleLowerCase(), item);
+        } else {
+          unresolved.push(wanted);
+        }
+      }
+
+      for (const wanted of unresolved) {
+        const item = await forgeResolveOneCardName(wanted);
+        if (!item) continue;
+        results.set(wanted.toLocaleLowerCase(), item);
+        results.set(item.name.toLocaleLowerCase(), item);
+        await new Promise(resolve => setTimeout(resolve, 55));
+      }
+
+      if (statusEl) {
+        const resolvedCount = requested.filter(name => results.has(name.toLocaleLowerCase())).length;
+        setStatus(
+          statusEl,
+          resolvedCount === requested.length
+            ? `Loaded ${resolvedCount} unique cards.`
+            : `Loaded ${resolvedCount}/${requested.length} unique cards.`,
+          resolvedCount ? 'success' : 'error'
+        );
+      }
+      return results;
+    };
+
+    moveCommanderOutOfLibrary = function(name, doCheckpoint=true) {
+      const wanted = forgeCardLookupKey(forgeAliasForCardName(name));
+      const id = state.zones.library.find(id => {
+        const c = card(id);
+        if (!c?.name) return false;
+        const full = forgeCardLookupKey(c.name);
+        const front = forgeCardLookupKey(String(c.name).split(' // ')[0]);
+        return full === wanted || front === wanted;
+      });
+      if (!id) return forgeBaseMoveCommanderOutOfLibrary(name, doCheckpoint);
+      if (doCheckpoint) checkpoint();
+      removeFromZones(id);
+      state.zones.command.push(id);
+      state.commanderName = card(id)?.name || name;
+      return true;
+    };
+
+    async function forgeRepairMissingRecognizedCards() {
+      if (forgeRepairPromise) return forgeRepairPromise;
+      forgeRepairPromise = (async () => {
+        const missing = Object.values(state.cards || {}).filter(c => {
+          if (!c || c.custom || !c.name || c.name === 'Unknown card') return false;
+          const hasFaceImage = Array.isArray(c.faces) && c.faces.some(face => face?.image);
+          return !c.image && !hasFaceImage;
+        });
+        if (!missing.length) return 0;
+
+        const names = [...new Map(missing.map(c => [c.name.toLocaleLowerCase(), c.name])).values()];
+        const map = await fetchScryfallCards(names, null);
+        let repaired = 0;
+
+        for (const c of missing) {
+          const oldName = c.name;
+          const data = map.get(oldName.toLocaleLowerCase()) || forgeFindResolvedData(map, forgeAliasForCardName(oldName));
+          if (!data) continue;
+          Object.assign(c, cardTemplate(data, oldName));
+          if (state.commanderName && forgeCardLookupKey(state.commanderName) === forgeCardLookupKey(oldName)) {
+            state.commanderName = c.name;
+          }
+          repaired++;
+        }
+
+        if (repaired) {
+          render();
+          scheduleSave();
+          toast(`Recognized ${repaired} missing card${repaired === 1 ? '' : 's'} from Scryfall.`);
+        }
+        return repaired;
+      })().finally(() => { forgeRepairPromise = null; });
+      return forgeRepairPromise;
+    }
+
+    normalizeLoadedState = function(raw) {
+      const next = forgeBaseNormalizeLoadedState(raw);
+      setTimeout(() => {
+        if (state === next && next.started) forgeRepairMissingRecognizedCards();
+      }, 0);
+      return next;
+    };
+  })();
