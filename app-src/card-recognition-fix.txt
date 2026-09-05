@@ -218,3 +218,292 @@
       return next;
     };
   })();
+
+  // Visual picker for Add any card.
+  // Search first, then explicitly select the exact card instead of trusting a
+  // single fuzzy result.
+  (() => {
+    const AUTOCOMPLETE_URL = 'https://api.scryfall.com/cards/autocomplete';
+    const modal = document.querySelector('#add-card-modal .small-modal');
+    const input = document.getElementById('add-card-name');
+    const status = document.getElementById('add-card-status');
+    const submit = document.getElementById('add-card-submit');
+    const zoneSelect = document.getElementById('add-card-zone');
+    if (!modal || !input || !status || !submit || !zoneSelect) return;
+
+    let selectedCard = null;
+    let searchResults = [];
+    let searchTimer = null;
+    let searchSequence = 0;
+
+    if (!document.getElementById('forge-add-card-picker-style')) {
+      const style = document.createElement('style');
+      style.id = 'forge-add-card-picker-style';
+      style.textContent = `
+        #add-card-modal .small-modal{
+          width:min(980px,96vw)!important;
+          max-height:94vh!important;
+        }
+        #forge-card-search-help{
+          margin:-2px 0 8px;
+          font-size:11px;
+          color:#9fb0aa;
+        }
+        #forge-card-search-results{
+          display:grid;
+          grid-template-columns:repeat(auto-fill,minmax(138px,1fr));
+          gap:12px;
+          max-height:50vh;
+          overflow:auto;
+          padding:10px;
+          margin:8px 0 14px;
+          border:1px solid rgba(91,116,107,.58);
+          border-radius:14px;
+          background:rgba(6,12,10,.38);
+        }
+        #forge-card-search-results:empty{display:none}
+        .forge-card-search-result{
+          display:flex;
+          flex-direction:column;
+          gap:7px;
+          min-width:0;
+          padding:7px;
+          border:1px solid rgba(91,116,107,.55);
+          border-radius:12px;
+          background:rgba(18,29,25,.96);
+          color:#eef4f0;
+          text-align:left;
+          cursor:pointer;
+          transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease,background .12s ease;
+        }
+        .forge-card-search-result:hover,
+        .forge-card-search-result:focus-visible{
+          transform:translateY(-2px);
+          border-color:rgba(241,199,121,.88);
+          box-shadow:0 10px 26px rgba(0,0,0,.42);
+          outline:none;
+        }
+        .forge-card-search-result.selected{
+          border-color:#f1c779;
+          box-shadow:0 0 0 2px rgba(241,199,121,.22),0 10px 28px rgba(0,0,0,.48);
+          background:rgba(31,43,36,.99);
+        }
+        .forge-card-search-result img,
+        .forge-card-search-fallback{
+          display:block;
+          width:100%;
+          aspect-ratio:488/680;
+          border-radius:9px;
+          object-fit:cover;
+          background:#17211f;
+        }
+        .forge-card-search-fallback{
+          padding:10px;
+          font-size:11px;
+          font-weight:800;
+        }
+        .forge-card-search-result strong{
+          font-size:11px;
+          line-height:1.25;
+        }
+        .forge-card-search-result small{
+          color:#9fb0aa;
+          font-size:9px;
+          line-height:1.25;
+        }
+        .forge-card-search-message{
+          grid-column:1/-1;
+          margin:0;
+          padding:18px;
+          text-align:center;
+          color:#9fb0aa;
+          font-size:12px;
+        }
+        @media(max-width:640px){
+          #forge-card-search-results{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:8px}
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const help = document.createElement('div');
+    help.id = 'forge-card-search-help';
+    help.textContent = 'Type at least 2 characters, then choose the exact card from the results.';
+    const resultsRoot = document.createElement('div');
+    resultsRoot.id = 'forge-card-search-results';
+    resultsRoot.setAttribute('role','listbox');
+    resultsRoot.setAttribute('aria-label','Matching Magic cards');
+    input.closest('label')?.insertAdjacentElement('afterend', help);
+    help.insertAdjacentElement('afterend', resultsRoot);
+
+    submit.textContent = 'Add selected card';
+    submit.disabled = true;
+
+    function pickerImage(data) {
+      if (!data) return '';
+      if (data.image_uris) return data.image_uris.small || data.image_uris.normal || data.image_uris.large || '';
+      const face = data.card_faces?.[0];
+      return face?.image_uris?.small || face?.image_uris?.normal || face?.image_uris?.large || '';
+    }
+
+    function resetPicker(clearInput=false) {
+      selectedCard = null;
+      searchResults = [];
+      searchSequence++;
+      clearTimeout(searchTimer);
+      submit.disabled = true;
+      resultsRoot.innerHTML = '';
+      if (clearInput) input.value = '';
+    }
+
+    function renderResults() {
+      resultsRoot.innerHTML = '';
+      if (!searchResults.length) {
+        const empty = document.createElement('p');
+        empty.className = 'forge-card-search-message';
+        empty.textContent = 'No matching cards found.';
+        resultsRoot.appendChild(empty);
+        return;
+      }
+
+      for (const data of searchResults) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'forge-card-search-result';
+        button.dataset.scryfallId = data.id || '';
+        button.setAttribute('role','option');
+        button.setAttribute('aria-selected', selectedCard?.id === data.id ? 'true' : 'false');
+        if (selectedCard?.id === data.id) button.classList.add('selected');
+
+        const image = pickerImage(data);
+        if (image) {
+          const img = document.createElement('img');
+          img.src = image;
+          img.alt = data.name || 'Magic card';
+          img.loading = 'lazy';
+          img.draggable = false;
+          button.appendChild(img);
+        } else {
+          const fallback = document.createElement('div');
+          fallback.className = 'forge-card-search-fallback';
+          fallback.textContent = data.name || 'Card';
+          button.appendChild(fallback);
+        }
+
+        const name = document.createElement('strong');
+        name.textContent = data.name || 'Unnamed card';
+        button.appendChild(name);
+
+        const type = document.createElement('small');
+        type.textContent = data.type_line || data.card_faces?.[0]?.type_line || '';
+        button.appendChild(type);
+
+        button.addEventListener('click', () => {
+          selectedCard = data;
+          input.value = data.name || input.value;
+          submit.disabled = false;
+          setStatus(status, `Selected ${data.name}. Choose a zone, then add it.`, 'success');
+          renderResults();
+        });
+        resultsRoot.appendChild(button);
+      }
+    }
+
+    async function runSearch(rawQuery) {
+      const query = String(rawQuery || '').trim();
+      const seq = ++searchSequence;
+      selectedCard = null;
+      submit.disabled = true;
+
+      if (query.length < 2) {
+        resultsRoot.innerHTML = '';
+        setStatus(status, 'Type at least 2 characters to search.');
+        return;
+      }
+
+      resultsRoot.innerHTML = '<p class="forge-card-search-message">Searching Scryfall…</p>';
+      setStatus(status, 'Searching for matching cards…');
+
+      try {
+        const autoRes = await fetch(`${AUTOCOMPLETE_URL}?q=${encodeURIComponent(query)}&include_extras=true`);
+        if (!autoRes.ok) throw new Error(`Search failed (${autoRes.status})`);
+        const autoPayload = await autoRes.json();
+        if (seq !== searchSequence) return;
+
+        const names = (autoPayload.data || []).slice(0, 16);
+        if (!names.length) {
+          searchResults = [];
+          renderResults();
+          setStatus(status, 'No matching card names found.', 'error');
+          return;
+        }
+
+        const map = await fetchScryfallCards(names, null);
+        if (seq !== searchSequence) return;
+        searchResults = names
+          .map(name => map.get(String(name).toLocaleLowerCase()))
+          .filter(Boolean)
+          .filter((item,index,array) => array.findIndex(other => other.id === item.id) === index);
+
+        renderResults();
+        setStatus(status, `${searchResults.length} matching card${searchResults.length === 1 ? '' : 's'} found. Select one.`);
+      } catch (err) {
+        if (seq !== searchSequence) return;
+        searchResults = [];
+        resultsRoot.innerHTML = '<p class="forge-card-search-message">Search unavailable. Try again.</p>';
+        setStatus(status, err?.message || 'Could not search Scryfall.', 'error');
+      }
+    }
+
+    input.addEventListener('input', () => {
+      selectedCard = null;
+      submit.disabled = true;
+      clearTimeout(searchTimer);
+      const query = input.value;
+      searchTimer = setTimeout(() => runSearch(query), 220);
+    });
+
+    input.addEventListener('focus', () => {
+      if (input.value.trim().length >= 2 && !resultsRoot.children.length) runSearch(input.value);
+    });
+
+    // Reset old results whenever the user intentionally opens Add any card.
+    document.getElementById('add-card-btn')?.addEventListener('click', () => {
+      resetPicker(false);
+      setStatus(status, 'Start typing to search for a card.');
+    });
+    document.getElementById('tool-add-card')?.addEventListener('click', () => {
+      resetPicker(false);
+      setStatus(status, 'Start typing to search for a card.');
+    });
+
+    addAnyCard = async function() {
+      if (!selectedCard) {
+        setStatus(status, 'Select a card from the search results first.', 'error');
+        if (input.value.trim().length >= 2) runSearch(input.value);
+        return;
+      }
+
+      submit.disabled = true;
+      try {
+        const instance = makeInstance(cardTemplate(selectedCard, selectedCard.name), {outsideDeck:true});
+        let target = zoneSelect.value;
+        let placement = 'bottom';
+        if (target === 'library-top') { target = 'library'; placement = 'top'; }
+        if (target === 'library-bottom') { target = 'library'; placement = 'bottom'; }
+
+        checkpoint();
+        addInstanceToState(instance, target, placement);
+        if (target === 'battlefield') { instance.x = 40; instance.y = 40; }
+        logEvent(`Added ${instance.name} to ${target}.`);
+        render();
+        scheduleSave();
+        closeModal('add-card-modal');
+        toast(`${instance.name} added.`);
+        resetPicker(true);
+        setStatus(status, '');
+      } finally {
+        submit.disabled = !selectedCard;
+      }
+    };
+  })();
