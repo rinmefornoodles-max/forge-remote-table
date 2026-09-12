@@ -25,6 +25,7 @@
     './app-src/precon-source-fix.txt',
     './app-src/any-card-search.txt',
     './app-src/tabletop-dice.txt',
+    './app-src/board-scale.txt',
     './app-src/part-04.txt'
   ];
 
@@ -43,5 +44,3 @@
     }
   }
 })();
-
-// Deployment refresh for the physical tabletop dice context-menu redesign.
