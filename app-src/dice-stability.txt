@@ -1,0 +1,88 @@
+
+  // Keep tabletop dice visually stable across ordinary app renders.
+  // The original dice renderer recreates every die on each render, which can
+  // cause visible blinking (especially while the D20 SVG is redrawn on RAF).
+  // Preserve the existing die nodes whenever the state object itself has not
+  // been replaced, while still letting fresh nodes be used after undo/import.
+  (() => {
+    let lastStateRef = state;
+
+    function directDice(root) {
+      return Array.from(root?.children || []).filter(el => el.classList?.contains('forge-table-die'));
+    }
+
+    function sameDieKind(a, b) {
+      if (!a || !b) return false;
+      return ['plus','minus','d20'].some(kind =>
+        a.classList.contains(`forge-die-${kind}`) && b.classList.contains(`forge-die-${kind}`)
+      );
+    }
+
+    function syncPreservedDie(oldEl, freshEl) {
+      // Position/title/classes can legitimately change during a render.
+      oldEl.style.left = freshEl.style.left;
+      oldEl.style.top = freshEl.style.top;
+      oldEl.title = freshEl.title;
+
+      const keepTurning = oldEl.classList.contains('is-turning');
+      oldEl.className = freshEl.className;
+      if (keepTurning) oldEl.classList.add('is-turning');
+
+      // Counter dice already contain every face, so copying the solid transform
+      // is enough to show the current value/orientation without rebuilding it.
+      const oldSolid = oldEl.querySelector('.forge-die-solid');
+      const freshSolid = freshEl.querySelector('.forge-die-solid');
+      if (oldSolid && freshSolid) oldSolid.style.transform = freshSolid.style.transform;
+
+      // Force the vector D20 renderer to refresh the preserved shell from the
+      // current state on its already-scheduled animation frame.
+      const shell = oldEl.querySelector('.forge-d20-shell');
+      if (shell) delete shell.dataset.realD20Key;
+    }
+
+    const stableDiceBaseRender = render;
+    render = function() {
+      const battlefield = document.getElementById('battlefield');
+      if (!battlefield) {
+        const result = stableDiceBaseRender();
+        lastStateRef = state;
+        return result;
+      }
+
+      // Only reuse event-bound nodes while the state object is the same.
+      // Undo/import/continue can replace state wholesale, in which case fresh
+      // dice are correct because their handlers must point at the new objects.
+      const mayReuse = state === lastStateRef;
+      const preserved = new Map();
+
+      if (mayReuse) {
+        for (const el of directDice(battlefield)) {
+          const id = el.dataset.dieId;
+          if (!id) continue;
+          preserved.set(id, el);
+          battlefield.removeChild(el);
+        }
+      }
+
+      const result = stableDiceBaseRender();
+
+      if (mayReuse && preserved.size) {
+        const freshDice = directDice(battlefield);
+        for (const fresh of freshDice) {
+          const id = fresh.dataset.dieId;
+          const old = preserved.get(id);
+          if (!old || !sameDieKind(old, fresh)) continue;
+
+          syncPreservedDie(old, fresh);
+          fresh.remove();
+          battlefield.appendChild(old);
+          preserved.delete(id);
+        }
+        // Any preserved die not reattached no longer exists in state and stays
+        // detached, so deletion still behaves normally.
+      }
+
+      lastStateRef = state;
+      return result;
+    };
+  })();
