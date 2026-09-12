@@ -28,6 +28,7 @@
     './app-src/real-d20.txt',
     './app-src/d20-face-forward.txt',
     './app-src/board-scale.txt',
+    './app-src/dice-stability.txt',
     './app-src/part-04.txt'
   ];
 
