@@ -1,7 +1,8 @@
 
   // High-quality persistent D20 renderer.
   // Projects a real icosahedron in SVG so turning the die keeps a full D20
-  // silhouette instead of flattening a 2D shell into a thin sliver.
+  // silhouette. Face labels are depth-sorted and clipped to their own facets
+  // so the numbers read as engraved on the die instead of floating above it.
   (() => {
     const PHI = (1 + Math.sqrt(5)) / 2;
     const VERTICES = [
@@ -22,18 +23,27 @@
       const style = document.createElement('style');
       style.id = 'forge-real-d20-style';
       style.textContent = `
+        /* Keep physical dice compact enough for crowded Commander boards. */
+        #battlefield .forge-table-die:not(.forge-die-d20){
+          width:58px!important;height:58px!important;
+          filter:drop-shadow(0 7px 5px rgba(0,0,0,.56))!important;
+        }
+        #battlefield .forge-table-die:not(.forge-die-d20) .forge-die-scene{
+          transform:scale(.84);transform-origin:center center;
+        }
+
         #battlefield .forge-table-die.forge-die-d20{
-          width:92px!important;height:92px!important;
-          filter:drop-shadow(0 10px 8px rgba(0,0,0,.60))!important;
+          width:74px!important;height:74px!important;
+          filter:drop-shadow(0 8px 6px rgba(0,0,0,.60))!important;
         }
         #battlefield .forge-die-d20:hover{
-          filter:drop-shadow(0 12px 10px rgba(0,0,0,.68)) brightness(1.025)!important;
+          filter:drop-shadow(0 9px 7px rgba(0,0,0,.68)) brightness(1.025)!important;
         }
         #battlefield .forge-die-d20 .forge-die-scene{
-          width:88px!important;height:88px!important;perspective:none!important;
+          width:72px!important;height:72px!important;perspective:none!important;
         }
         #battlefield .forge-die-d20 .forge-d20-solid{
-          width:86px!important;height:86px!important;
+          width:70px!important;height:70px!important;
           transform:none!important;
           transform-style:flat!important;
         }
@@ -46,25 +56,21 @@
         #battlefield .forge-die-d20 .forge-d20-number{display:none!important}
         .forge-real-d20-svg{
           display:block;width:100%;height:100%;overflow:visible;
-          filter:drop-shadow(0 4px 3px rgba(0,0,0,.42));
+          filter:drop-shadow(0 3px 2px rgba(0,0,0,.42));
         }
         .forge-real-d20-face{
-          stroke:#63391f;stroke-width:1.15;stroke-linejoin:round;
+          stroke:#60371f;stroke-width:1.05;stroke-linejoin:round;
           vector-effect:non-scaling-stroke;
-        }
-        .forge-real-d20-edge{
-          fill:none;stroke:rgba(64,32,17,.78);stroke-width:.75;
-          vector-effect:non-scaling-stroke;pointer-events:none;
         }
         .forge-real-d20-num{
           font-family:Georgia,'Times New Roman',serif;font-weight:800;
-          fill:#2b2019;stroke:rgba(240,164,105,.22);stroke-width:.42;
+          fill:#281910;stroke:rgba(245,178,119,.28);stroke-width:.46;
           paint-order:stroke fill;dominant-baseline:middle;text-anchor:middle;
           pointer-events:none;
         }
         .forge-real-d20-num.is-top{
-          font-size:15px;font-weight:900;fill:#21160f;
-          stroke:rgba(255,190,132,.34);stroke-width:.6;
+          font-weight:900;fill:#21140d;
+          stroke:rgba(255,196,142,.38);stroke-width:.6;
         }
       `;
       document.head.appendChild(style);
@@ -97,15 +103,40 @@
 
     function colorForLight(amount) {
       const t = clamp01(amount);
-      const shadow = [91,43,24], mid = [171,91,50], high = [226,145,88];
+      const shadow = [83,39,22], mid = [166,87,48], high = [225,147,92];
       const mix = (a,b,x) => a.map((v,i)=>Math.round(v+(b[i]-v)*x));
       const rgb = t < .55 ? mix(shadow,mid,t/.55) : mix(mid,high,(t-.55)/.45);
       return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
     }
 
+    function triangleArea(points) {
+      const [a,b,c] = points;
+      return Math.abs(
+        a[0]*(b[1]-c[1]) + b[0]*(c[1]-a[1]) + c[0]*(a[1]-b[1])
+      ) / 2;
+    }
+
+    function readableAngle(points) {
+      // Align the number roughly with the longest edge of its triangular face,
+      // but never leave the numeral upside-down.
+      const edges = [[0,1],[1,2],[2,0]].map(([a,b]) => {
+        const dx=points[b][0]-points[a][0], dy=points[b][1]-points[a][1];
+        return {dx,dy,len:Math.hypot(dx,dy)};
+      }).sort((a,b)=>b.len-a.len);
+      let angle = Math.atan2(edges[0].dy,edges[0].dx) * 180 / Math.PI;
+      while (angle > 90) angle -= 180;
+      while (angle < -90) angle += 180;
+      return Math.max(-34,Math.min(34,angle));
+    }
+
     function renderRealD20(el, die) {
       const shell = el.querySelector('.forge-d20-shell');
       if (!shell) return;
+
+      const key = [die.value,Number(die.rx)||0,Number(die.ry)||0,Number(die.rz)||0].map(v=>Number(v).toFixed(2)).join('|');
+      if (shell.dataset.realD20Key === key) return;
+      shell.dataset.realD20Key = key;
+
       const rx = rad(die.rx), ry = rad(die.ry), rz = rad(die.rz);
       const rotated = VERTICES.map(v => rotatePoint(v,rx,ry,rz));
       const camera = 5.0;
@@ -124,37 +155,51 @@
         const centroid=[(a[0]+b[0]+c[0])/3,(a[1]+b[1]+c[1])/3,(a[2]+b[2]+c[2])/3];
         if (dot(normal,centroid) < 0) normal = normal.map(v=>-v);
         normal = normalize(normal);
-        if (normal[2] <= -.02) return;
+        if (normal[2] <= 0) return;
         const light = .30 + .70 * Math.max(0,dot(normal,lightDir));
         visible.push({face,index,centroid,normal,light});
       });
       visible.sort((a,b)=>a.centroid[2]-b.centroid[2]);
       if (!visible.length) return;
-      const front = visible.reduce((best,item)=>item.centroid[2] > best.centroid[2] ? item : best, visible[0]);
+      const front = visible.reduce((best,item)=>item.normal[2] > best.normal[2] ? item : best, visible[0]);
 
-      const used = new Set([die.value]);
+      const used = new Set([Number(die.value)||1]);
       function labelFor(item) {
-        if (item === front) return die.value;
+        if (item === front) return Number(die.value)||1;
         let candidate = ((Number(die.value)||1) + item.index*7 + 3) % 20 + 1;
         while (used.has(candidate)) candidate = candidate % 20 + 1;
         used.add(candidate);
         return candidate;
       }
 
-      const polygons = [];
-      const labels = [];
+      const defs = [];
+      const groups = [];
       for (const item of visible) {
         const pts = item.face.map(i=>projected[i]);
         const pointString = pts.map(p=>`${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ');
-        polygons.push(`<polygon class="forge-real-d20-face" points="${pointString}" fill="${colorForLight(item.light)}"/>`);
+        const clipId = `forgeD20Face_${String(die.id||'die').replace(/[^a-zA-Z0-9_-]/g,'')}_${item.index}`;
+        defs.push(`<clipPath id="${clipId}"><polygon points="${pointString}"/></clipPath>`);
+
         const cx=(pts[0][0]+pts[1][0]+pts[2][0])/3;
         const cy=(pts[0][1]+pts[1][1]+pts[2][1])/3;
-        const label=labelFor(item);
-        const size=item===front?15:Math.max(7.5,10.5 + item.centroid[2]*1.25);
-        labels.push(`<text class="forge-real-d20-num${item===front?' is-top':''}" x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" style="font-size:${size.toFixed(1)}px">${label}</text>`);
+        const area=triangleArea(pts);
+        const canLabel = item.normal[2] > .18 && area > 42;
+        let labelMarkup='';
+        if (canLabel) {
+          const label=labelFor(item);
+          const size=item===front
+            ? Math.max(10.5,Math.min(14.2,Math.sqrt(area)*1.55))
+            : Math.max(7.2,Math.min(10.2,Math.sqrt(area)*1.17));
+          const angle=readableAngle(pts);
+          labelMarkup=`<text class="forge-real-d20-num${item===front?' is-top':''}" x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" style="font-size:${size.toFixed(1)}px" transform="rotate(${angle.toFixed(1)} ${cx.toFixed(2)} ${cy.toFixed(2)})" clip-path="url(#${clipId})">${label}</text>`;
+        }
+
+        // Each face and its number are emitted together in depth order. Nearer
+        // polygons therefore naturally cover text belonging to farther faces.
+        groups.push(`<g><polygon class="forge-real-d20-face" points="${pointString}" fill="${colorForLight(item.light)}"/>${labelMarkup}</g>`);
       }
 
-      shell.innerHTML = `<svg class="forge-real-d20-svg" viewBox="0 0 100 100" aria-label="D20 showing ${die.value}"><defs><radialGradient id="forgeCopperGlow" cx="30%" cy="20%" r="80%"><stop offset="0" stop-color="#ffd0a0" stop-opacity=".25"/><stop offset=".55" stop-color="#8f4829" stop-opacity="0"/><stop offset="1" stop-color="#3b1c10" stop-opacity=".18"/></radialGradient></defs>${polygons.join('')}<circle cx="50" cy="50" r="38" fill="url(#forgeCopperGlow)" pointer-events="none"/>${labels.join('')}</svg>`;
+      shell.innerHTML = `<svg class="forge-real-d20-svg" viewBox="0 0 100 100" aria-label="D20 showing ${die.value}"><defs>${defs.join('')}<radialGradient id="forgeCopperGlow_${String(die.id||'die').replace(/[^a-zA-Z0-9_-]/g,'')}" cx="30%" cy="20%" r="80%"><stop offset="0" stop-color="#ffd0a0" stop-opacity=".18"/><stop offset=".58" stop-color="#8f4829" stop-opacity="0"/><stop offset="1" stop-color="#3b1c10" stop-opacity=".12"/></radialGradient></defs>${groups.join('')}</svg>`;
     }
 
     function findDie(id) {
@@ -182,7 +227,7 @@
         childList:true, subtree:true, attributes:true, attributeFilter:['style']
       });
     }
-    document.addEventListener('pointermove', e => {
+    document.addEventListener('pointermove', () => {
       if (document.querySelector('#battlefield .forge-die-d20.is-turning')) scheduleRealD20Render();
     }, true);
 
