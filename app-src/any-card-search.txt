@@ -1,0 +1,185 @@
+
+  // Broaden "+ Any card" into a real Scryfall search, including tokens,
+  // emblems, and other extra card objects. This intentionally runs before
+  // wireEvents(), so the existing button/Enter handlers bind to this override.
+  (() => {
+    const SEARCH_URL = 'https://api.scryfall.com/cards/search';
+    const RESULT_LIMIT = 60;
+
+    const modal = $('#add-card-modal');
+    const title = $('#add-card-title');
+    const intro = modal?.querySelector('.muted-block');
+    const submit = $('#add-card-submit');
+    const status = $('#add-card-status');
+    if (!modal || !submit || !status) return;
+
+    if (title) title.textContent = 'Add any card or token';
+    if (intro) intro.textContent = 'Search normal cards, tokens, emblems, and other Scryfall extras, then put the exact object you want in any zone.';
+    submit.textContent = 'Search cards & tokens';
+
+    const results = document.createElement('div');
+    results.id = 'add-card-results';
+    results.className = 'forge-any-card-results';
+    results.hidden = true;
+    status.insertAdjacentElement('afterend', results);
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #add-card-modal .small-modal{width:min(960px,96vw)!important}
+      .forge-any-card-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;max-height:52vh;overflow:auto;margin:12px 0 14px;padding:2px}
+      .forge-any-card-result{appearance:none;border:1px solid var(--line);background:rgba(255,255,255,.035);border-radius:12px;padding:9px;text-align:left;color:inherit;display:grid;grid-template-columns:72px minmax(0,1fr);gap:11px;align-items:center;cursor:pointer;transition:transform .12s ease,border-color .12s ease,background .12s ease}
+      .forge-any-card-result:hover,.forge-any-card-result:focus-visible{transform:translateY(-1px);border-color:var(--line-strong);background:rgba(255,255,255,.07);outline:none}
+      .forge-any-card-result img{width:72px;aspect-ratio:488/680;object-fit:cover;border-radius:7px;background:#0a0e0d}
+      .forge-any-card-result .forge-any-card-fallback{width:72px;aspect-ratio:488/680;border-radius:7px;background:#0a0e0d;display:grid;place-items:center;font-size:10px;color:var(--muted);text-align:center;padding:4px}
+      .forge-any-card-result strong{display:block;font-size:14px;line-height:1.2;margin-bottom:4px}
+      .forge-any-card-result span{display:block;color:var(--muted);font-size:12px;line-height:1.28}
+      .forge-any-card-result .forge-any-card-pt{color:var(--text);margin-top:4px}
+      @media(max-width:720px){.forge-any-card-results{grid-template-columns:1fr}.forge-any-card-result{grid-template-columns:62px minmax(0,1fr)}.forge-any-card-result img,.forge-any-card-result .forge-any-card-fallback{width:62px}}
+    `;
+    document.head.appendChild(style);
+
+    let searchResults = [];
+
+    function forgeAnyCardClearResults() {
+      searchResults = [];
+      results.replaceChildren();
+      results.hidden = true;
+    }
+
+    function forgeAnyCardIsTokenLike(data) {
+      const layout = String(data?.layout || '').toLowerCase();
+      const type = String(data?.type_line || '').toLowerCase();
+      return layout.includes('token') || layout === 'emblem' || type.startsWith('token ') || type.includes(' emblem');
+    }
+
+    function forgeAnyCardAddData(data) {
+      if (!data) return;
+      const template = cardTemplate(data, data.name || 'Unknown card');
+      const instance = makeInstance(template, {
+        outsideDeck: true,
+        token: forgeAnyCardIsTokenLike(data)
+      });
+      let target = $('#add-card-zone').value;
+      let placement = 'bottom';
+      if (target === 'library-top') { target = 'library'; placement = 'top'; }
+      if (target === 'library-bottom') { target = 'library'; placement = 'bottom'; }
+      checkpoint();
+      addInstanceToState(instance, target, placement);
+      if (target === 'battlefield') { instance.x = 40; instance.y = 40; }
+      logEvent(`Added ${instance.name} to ${target}.`);
+      render();
+      scheduleSave();
+      forgeAnyCardClearResults();
+      $('#add-card-name').value = '';
+      closeModal('add-card-modal');
+      toast(`${instance.name} added.`);
+    }
+
+    function forgeAnyCardRenderResults(payload) {
+      searchResults = Array.isArray(payload?.data) ? payload.data.slice(0, RESULT_LIMIT) : [];
+      results.replaceChildren();
+      if (!searchResults.length) {
+        results.hidden = true;
+        return;
+      }
+
+      searchResults.forEach((data, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'forge-any-card-result';
+        button.dataset.resultIndex = String(index);
+
+        const image = imageForScryfall(data, 0);
+        if (image) {
+          const img = document.createElement('img');
+          img.src = image;
+          img.alt = data.name || 'Magic card';
+          img.loading = 'lazy';
+          button.appendChild(img);
+        } else {
+          const fallback = document.createElement('div');
+          fallback.className = 'forge-any-card-fallback';
+          fallback.textContent = 'No image';
+          button.appendChild(fallback);
+        }
+
+        const text = document.createElement('div');
+        const name = document.createElement('strong');
+        name.textContent = data.name || 'Unknown card';
+        text.appendChild(name);
+
+        const type = document.createElement('span');
+        type.textContent = data.type_line || data.layout || 'Magic object';
+        text.appendChild(type);
+
+        const printing = document.createElement('span');
+        const setBits = [data.set_name || String(data.set || '').toUpperCase(), data.collector_number ? `#${data.collector_number}` : ''].filter(Boolean);
+        printing.textContent = setBits.join(' · ');
+        text.appendChild(printing);
+
+        const p = data.power ?? data.card_faces?.[0]?.power;
+        const t = data.toughness ?? data.card_faces?.[0]?.toughness;
+        if (p != null || t != null) {
+          const pt = document.createElement('span');
+          pt.className = 'forge-any-card-pt';
+          pt.textContent = `${p ?? '?'}/${t ?? '?'}`;
+          text.appendChild(pt);
+        }
+
+        button.appendChild(text);
+        button.addEventListener('click', () => forgeAnyCardAddData(searchResults[index]));
+        results.appendChild(button);
+      });
+      results.hidden = false;
+    }
+
+    addAnyCard = async function() {
+      const raw = $('#add-card-name').value.trim();
+      if (!raw) return setStatus(status, 'Enter a card or token name.', 'error');
+      forgeAnyCardClearResults();
+      setStatus(status, 'Searching cards, tokens, and extras…');
+      submit.disabled = true;
+
+      try {
+        // name:"..." keeps ordinary text input intuitive while include_extras
+        // brings tokens/emblems into the same result set. Newest printings first
+        // makes current-set tokens (such as Marvel walls) easy to find.
+        const safeName = raw.replace(/["\\]/g, ' ').replace(/\s+/g, ' ').trim();
+        const query = `name:"${safeName}"`;
+        const url = `${SEARCH_URL}?q=${encodeURIComponent(query)}&unique=prints&order=released&dir=desc&include_extras=true&include_variations=true`;
+        const res = await fetch(url, { headers: { Accept: 'application/json;q=0.9,*/*;q=0.8' } });
+
+        let payload = null;
+        if (res.ok) payload = await res.json();
+
+        // Preserve the old fuzzy convenience for misspellings/partial names when
+        // the full search returns nothing. Normal named cards still add cleanly.
+        if (!payload?.data?.length) {
+          const fuzzy = await fetch(`${SCRYFALL_NAMED}?fuzzy=${encodeURIComponent(raw)}`);
+          if (!fuzzy.ok) throw new Error('No matching card or token found');
+          const item = await fuzzy.json();
+          payload = { data: [item], total_cards: 1 };
+        }
+
+        forgeAnyCardRenderResults(payload);
+        const total = Number(payload.total_cards) || payload.data.length;
+        if (total === 1) {
+          setStatus(status, '1 match found. Select it below.', 'success');
+        } else if (total > RESULT_LIMIT) {
+          setStatus(status, `${total} matches found. Showing the newest ${RESULT_LIMIT}; choose the exact printing/token below.`, 'success');
+        } else {
+          setStatus(status, `${total} matches found. Choose the exact card or token below.`, 'success');
+        }
+      } catch (err) {
+        setStatus(status, err?.message || 'No matching card or token found', 'error');
+      } finally {
+        submit.disabled = false;
+      }
+    };
+
+    // Clear stale choices whenever the user opens the tool again.
+    document.addEventListener('click', e => {
+      if (!e.target.closest?.('#add-card-btn,#tool-add-card')) return;
+      forgeAnyCardClearResults();
+    }, true);
+  })();
