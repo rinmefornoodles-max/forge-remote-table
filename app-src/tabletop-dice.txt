@@ -1,0 +1,403 @@
+
+  // Persistent tabletop dice: +/+ counters, -/- counters, and D20s.
+  // Dice live on the battlefield, save with the table, can be dragged over cards,
+  // and always render above cards/stacks while remaining below app modals.
+  (() => {
+    const DICE_Z = 12000;
+    const CUBE_FACES = [
+      ['front', 1], ['back', 6], ['right', 3], ['left', 4], ['top', 2], ['bottom', 5]
+    ];
+
+    function ensureDiceState() {
+      if (!Array.isArray(state.dice)) state.dice = [];
+      state.dice = state.dice.filter(d => d && d.id && ['plus','minus','d20'].includes(d.kind));
+      for (const die of state.dice) {
+        die.value = clamp(Number(die.value) || 1, 1, die.kind === 'd20' ? 20 : 6);
+        die.x = Math.max(0, Number(die.x) || 0);
+        die.y = Math.max(0, Number(die.y) || 0);
+        die.rx = Number.isFinite(Number(die.rx)) ? Number(die.rx) : -14;
+        die.ry = Number.isFinite(Number(die.ry)) ? Number(die.ry) : 18;
+        die.rz = Number.isFinite(Number(die.rz)) ? Number(die.rz) : 0;
+      }
+      return state.dice;
+    }
+
+    function installDiceStyle() {
+      if (document.getElementById('forge-tabletop-dice-style')) return;
+      const style = document.createElement('style');
+      style.id = 'forge-tabletop-dice-style';
+      style.textContent = `
+        #battlefield{isolation:isolate}
+        .forge-table-die{
+          position:absolute;z-index:${DICE_Z};width:76px;height:76px;display:grid;place-items:center;
+          user-select:none;touch-action:none;cursor:grab;pointer-events:auto;overflow:visible;
+          filter:drop-shadow(0 10px 9px rgba(0,0,0,.55));
+        }
+        .forge-table-die:active{cursor:grabbing}
+        .forge-die-scene{position:relative;width:64px;height:64px;perspective:520px;display:grid;place-items:center}
+        .forge-die-solid{position:relative;width:58px;height:58px;transform-style:preserve-3d;transition:transform .16s ease-out;will-change:transform}
+        .forge-table-die.is-turning .forge-die-solid{transition:transform .08s linear}
+        .forge-die-face{
+          position:absolute;inset:0;display:grid;place-items:center;border:1px solid rgba(255,255,255,.28);
+          border-radius:10px;backface-visibility:hidden;font-size:9px;font-weight:950;line-height:1.05;text-align:center;
+          text-shadow:0 1px 2px rgba(0,0,0,.72);box-shadow:inset 0 0 16px rgba(255,255,255,.08);
+        }
+        .forge-die-plus .forge-die-face{background:linear-gradient(145deg,#295b3d,#10291d);color:#eaffef;border-color:#7ed69d}
+        .forge-die-minus .forge-die-face{background:linear-gradient(145deg,#6a3030,#301414);color:#fff0f0;border-color:#db8383}
+        .forge-die-face.front{transform:translateZ(29px)}
+        .forge-die-face.back{transform:rotateY(180deg) translateZ(29px)}
+        .forge-die-face.right{transform:rotateY(90deg) translateZ(29px)}
+        .forge-die-face.left{transform:rotateY(-90deg) translateZ(29px)}
+        .forge-die-face.top{transform:rotateX(90deg) translateZ(29px)}
+        .forge-die-face.bottom{transform:rotateX(-90deg) translateZ(29px)}
+
+        .forge-d20-solid{width:66px;height:66px}
+        .forge-d20-face{
+          position:absolute;left:50%;top:50%;width:48px;height:42px;margin-left:-24px;margin-top:-21px;
+          clip-path:polygon(50% 0,100% 100%,0 100%);display:grid;place-items:end center;padding-bottom:6px;
+          background:linear-gradient(150deg,rgba(203,161,92,.88),rgba(77,54,31,.96));
+          border:1px solid rgba(255,230,175,.55);color:#fff3d3;font-size:7px;font-weight:900;
+          text-shadow:0 1px 2px #000;backface-visibility:visible;transform-origin:50% 50%;
+        }
+        .forge-d20-readout{
+          position:absolute;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);width:34px;height:34px;
+          display:grid;place-items:center;border-radius:50%;background:rgba(8,13,12,.88);border:2px solid #f1c779;
+          color:#fff4d9;font-size:17px;font-weight:950;box-shadow:0 4px 12px rgba(0,0,0,.48);pointer-events:none;
+        }
+
+        .forge-die-controls{
+          position:absolute;left:50%;top:-18px;z-index:${DICE_Z + 1};transform:translateX(-50%);
+          display:flex;gap:3px;opacity:0;pointer-events:none;transition:opacity .12s ease;
+        }
+        .forge-table-die:hover .forge-die-controls,.forge-table-die:focus-within .forge-die-controls{
+          opacity:1;pointer-events:auto;
+        }
+        .forge-die-control{
+          min-width:22px;height:22px;padding:0 5px;border:1px solid #7a694e;border-radius:6px;
+          background:#111a17;color:#f5dfb5;font-size:11px;font-weight:900;cursor:pointer;box-shadow:0 3px 8px #000;
+        }
+        .forge-die-control.danger{color:#ffc1c1;border-color:#8f5353}
+        .forge-die-kind{
+          position:absolute;left:50%;bottom:-15px;transform:translateX(-50%);padding:2px 5px;border-radius:999px;
+          background:rgba(8,12,11,.86);border:1px solid rgba(208,164,95,.42);color:#d5c09c;
+          font-size:7px;font-weight:900;letter-spacing:.05em;white-space:nowrap;pointer-events:none;
+        }
+
+        #forge-dice-modal .forge-dice-picks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
+        #forge-dice-modal .forge-dice-pick{min-height:112px;display:grid;place-items:center;gap:5px;text-align:center}
+        #forge-dice-modal .forge-dice-pick strong{font-size:13px}
+        #forge-dice-modal .forge-dice-pick span{font-size:10px;color:var(--muted);font-weight:600}
+        #forge-dice-modal .forge-dice-help{font-size:11px;color:var(--muted);line-height:1.5;margin:12px 0 0}
+        @media(max-width:650px){#forge-dice-modal .forge-dice-picks{grid-template-columns:1fr}.forge-table-die{width:70px;height:70px}}
+      `;
+      document.head.appendChild(style);
+    }
+
+    function counterLabel(kind, value) {
+      const sign = kind === 'minus' ? '-' : '+';
+      return `${sign}${value}/${sign}${value}`;
+    }
+
+    function maxFor(die) { return die.kind === 'd20' ? 20 : 6; }
+    function wrapValue(value, max) { return ((Number(value) - 1 + max * 20) % max) + 1; }
+
+    function snapOrientation(die) {
+      if (die.kind === 'd20') {
+        const v = die.value;
+        die.rx = -34 + ((v * 47) % 118);
+        die.ry = 18 + ((v * 73) % 360);
+        die.rz = -24 + ((v * 29) % 48);
+        return;
+      }
+      const map = {
+        1:[-14,18,0],
+        2:[-102,18,0],
+        3:[-14,-72,0],
+        4:[-14,108,0],
+        5:[76,18,0],
+        6:[-14,198,0]
+      };
+      [die.rx, die.ry, die.rz] = map[die.value] || map[1];
+    }
+
+    function setDieValue(die, value, shouldSnap=true) {
+      die.value = wrapValue(value, maxFor(die));
+      if (shouldSnap) snapOrientation(die);
+    }
+
+    function updateDieDom(el, die) {
+      el.style.left = `${Math.max(0, Number(die.x)||0)}px`;
+      el.style.top = `${Math.max(0, Number(die.y)||0)}px`;
+      const solid = el.querySelector('.forge-die-solid');
+      if (solid) solid.style.transform = `rotateX(${die.rx}deg) rotateY(${die.ry}deg) rotateZ(${die.rz}deg)`;
+      const readout = el.querySelector('.forge-d20-readout');
+      if (readout) readout.textContent = String(die.value);
+      if (die.kind !== 'd20') {
+        for (const face of el.querySelectorAll('.forge-die-face[data-face-value]')) {
+          const value = Number(face.dataset.faceValue) || 1;
+          face.textContent = counterLabel(die.kind, value);
+        }
+      }
+      el.title = die.kind === 'd20'
+        ? `D20 — ${die.value}. Drag to move. Shift-drag or right-drag to turn.`
+        : `${die.kind === 'minus' ? '-/-' : '+/+'} counter die — ${counterLabel(die.kind, die.value)}. Drag to move. Shift-drag or right-drag to turn.`;
+    }
+
+    function makeD20Solid(die) {
+      const solid = document.createElement('div');
+      solid.className = 'forge-die-solid forge-d20-solid';
+      for (let i=0;i<20;i++) {
+        const face = document.createElement('span');
+        face.className = 'forge-d20-face';
+        face.textContent = String(i+1);
+        const ring = Math.floor(i/5);
+        const slot = i % 5;
+        const pitch = [-58,-20,20,58][ring];
+        const yaw = slot * 72 + (ring % 2 ? 36 : 0);
+        const twist = ring % 2 ? 180 : 0;
+        face.style.transform = `rotateY(${yaw}deg) rotateX(${pitch}deg) rotateZ(${twist}deg) translateZ(31px)`;
+        solid.appendChild(face);
+      }
+      return solid;
+    }
+
+    function makeCubeSolid(die) {
+      const solid = document.createElement('div');
+      solid.className = 'forge-die-solid';
+      for (const [side,value] of CUBE_FACES) {
+        const face = document.createElement('span');
+        face.className = `forge-die-face ${side}`;
+        face.dataset.faceValue = String(value);
+        face.textContent = counterLabel(die.kind, value);
+        solid.appendChild(face);
+      }
+      return solid;
+    }
+
+    function nudgeValue(el, die, delta, makeCheckpoint=true) {
+      if (makeCheckpoint) checkpoint();
+      setDieValue(die, die.value + delta, true);
+      updateDieDom(el, die);
+      scheduleSave();
+    }
+
+    function deleteDie(die) {
+      ensureDiceState();
+      checkpoint();
+      state.dice = state.dice.filter(d => d.id !== die.id);
+      render();
+      scheduleSave();
+      toast('Die removed.');
+    }
+
+    function wireDieInteraction(el, die) {
+      let gesture = null;
+      let wheelTimer = null;
+      let wheelCheckpointed = false;
+
+      el.addEventListener('contextmenu', e => e.preventDefault());
+
+      el.addEventListener('pointerdown', e => {
+        if (e.target.closest('.forge-die-control')) return;
+        if (e.button !== 0 && e.button !== 2) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const mode = (e.button === 2 || e.shiftKey) ? 'turn' : 'move';
+        gesture = {
+          pointerId:e.pointerId, mode,
+          startClientX:e.clientX, startClientY:e.clientY,
+          startX:Number(die.x)||0, startY:Number(die.y)||0,
+          startValue:die.value, changed:false, checkpointed:false
+        };
+        el.classList.toggle('is-turning', mode === 'turn');
+        try { el.setPointerCapture(e.pointerId); } catch {}
+      });
+
+      el.addEventListener('pointermove', e => {
+        if (!gesture || gesture.pointerId !== e.pointerId) return;
+        const dx = e.clientX - gesture.startClientX;
+        const dy = e.clientY - gesture.startClientY;
+        if (!gesture.changed && Math.hypot(dx,dy) < 3) return;
+        if (!gesture.checkpointed) {
+          checkpoint();
+          gesture.checkpointed = true;
+        }
+        gesture.changed = true;
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (gesture.mode === 'move') {
+          const bf = $('#battlefield');
+          const maxX = Math.max(0, (bf?.scrollWidth || bf?.clientWidth || 0) - 42);
+          const maxY = Math.max(0, (bf?.scrollHeight || bf?.clientHeight || 0) - 42);
+          die.x = clamp(gesture.startX + dx, 0, maxX || 99999);
+          die.y = clamp(gesture.startY + dy, 0, maxY || 99999);
+        } else {
+          const steps = Math.trunc((dx - dy) / 34);
+          setDieValue(die, gesture.startValue + steps, true);
+        }
+        updateDieDom(el, die);
+      });
+
+      const finish = e => {
+        if (!gesture || (e.pointerId != null && gesture.pointerId !== e.pointerId)) return;
+        const changed = gesture.changed;
+        gesture = null;
+        el.classList.remove('is-turning');
+        try { if (e.pointerId != null) el.releasePointerCapture(e.pointerId); } catch {}
+        if (changed) scheduleSave();
+      };
+      el.addEventListener('pointerup', finish);
+      el.addEventListener('pointercancel', finish);
+
+      el.addEventListener('wheel', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!wheelCheckpointed) {
+          checkpoint();
+          wheelCheckpointed = true;
+        }
+        const delta = e.deltaY > 0 ? 1 : -1;
+        setDieValue(die, die.value + delta, true);
+        updateDieDom(el, die);
+        clearTimeout(wheelTimer);
+        wheelTimer = setTimeout(() => {
+          wheelCheckpointed = false;
+          scheduleSave();
+        }, 180);
+      }, {passive:false});
+
+      el.addEventListener('dblclick', e => {
+        if (e.target.closest('.forge-die-control')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        nudgeValue(el, die, 1, true);
+      });
+
+      el.querySelector('[data-die-minus]')?.addEventListener('click', e => {
+        e.preventDefault(); e.stopPropagation(); nudgeValue(el, die, -1, true);
+      });
+      el.querySelector('[data-die-plus]')?.addEventListener('click', e => {
+        e.preventDefault(); e.stopPropagation(); nudgeValue(el, die, 1, true);
+      });
+      el.querySelector('[data-die-turn]')?.addEventListener('click', e => {
+        e.preventDefault(); e.stopPropagation(); nudgeValue(el, die, 1, true);
+      });
+      el.querySelector('[data-die-delete]')?.addEventListener('click', e => {
+        e.preventDefault(); e.stopPropagation(); deleteDie(die);
+      });
+    }
+
+    function makeDieElement(die) {
+      const el = document.createElement('div');
+      el.className = `forge-table-die forge-die-${die.kind}`;
+      el.dataset.dieId = die.id;
+      el.tabIndex = 0;
+
+      const controls = document.createElement('div');
+      controls.className = 'forge-die-controls';
+      controls.innerHTML = `<button class="forge-die-control" type="button" data-die-minus title="Previous face">−</button><button class="forge-die-control" type="button" data-die-plus title="Next face">+</button><button class="forge-die-control" type="button" data-die-turn title="Turn die">↻</button><button class="forge-die-control danger" type="button" data-die-delete title="Remove die">×</button>`;
+      el.appendChild(controls);
+
+      const scene = document.createElement('div');
+      scene.className = 'forge-die-scene';
+      scene.appendChild(die.kind === 'd20' ? makeD20Solid(die) : makeCubeSolid(die));
+      if (die.kind === 'd20') {
+        const readout = document.createElement('span');
+        readout.className = 'forge-d20-readout';
+        readout.textContent = String(die.value);
+        scene.appendChild(readout);
+      }
+      el.appendChild(scene);
+
+      const kind = document.createElement('span');
+      kind.className = 'forge-die-kind';
+      kind.textContent = die.kind === 'd20' ? 'D20' : (die.kind === 'minus' ? '−/− COUNTER' : '+/+ COUNTER');
+      el.appendChild(kind);
+
+      updateDieDom(el, die);
+      wireDieInteraction(el, die);
+      return el;
+    }
+
+    function renderDice() {
+      if (!state.started) return;
+      ensureDiceState();
+      const bf = $('#battlefield');
+      if (!bf) return;
+      bf.querySelectorAll('.forge-table-die').forEach(el => el.remove());
+      for (const die of state.dice) bf.appendChild(makeDieElement(die));
+    }
+
+    function createDie(kind) {
+      if (!['plus','minus','d20'].includes(kind)) return;
+      ensureDiceState();
+      const bf = $('#battlefield');
+      const offset = state.dice.length % 7;
+      const x = Math.max(8, (bf?.scrollLeft || 0) + Math.min(180, (bf?.clientWidth || 500) * .42) + offset * 12);
+      const y = Math.max(8, (bf?.scrollTop || 0) + Math.min(150, (bf?.clientHeight || 500) * .28) + offset * 10);
+      const die = { id:uid(), kind, value:1, x, y, rx:-14, ry:18, rz:0 };
+      snapOrientation(die);
+      checkpoint();
+      state.dice.push(die);
+      renderDice();
+      scheduleSave();
+      toast(kind === 'd20' ? 'D20 placed on the table.' : `${kind === 'minus' ? '-/-' : '+/+'} counter die placed.`);
+    }
+
+    function installDiceUi() {
+      installDiceStyle();
+      const actions = document.querySelector('.battlefield-actions');
+      if (actions && !document.getElementById('forge-dice-btn')) {
+        const button = document.createElement('button');
+        button.id = 'forge-dice-btn';
+        button.className = 'btn tiny';
+        button.type = 'button';
+        button.textContent = '+ Dice';
+        const tokenButton = document.getElementById('token-btn');
+        if (tokenButton?.parentElement === actions) tokenButton.insertAdjacentElement('afterend', button);
+        else actions.appendChild(button);
+      }
+
+      if (!document.getElementById('forge-dice-modal')) {
+        const modal = document.createElement('div');
+        modal.id = 'forge-dice-modal';
+        modal.className = 'modal-backdrop';
+        modal.hidden = true;
+        modal.innerHTML = `<section class="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="forge-dice-title"><button class="modal-close" type="button" data-close-dice aria-label="Close">×</button><div class="eyebrow">TABLETOP OBJECTS</div><h2 id="forge-dice-title">Create a die</h2><p class="muted-block">Place physical-style dice anywhere on the battlefield, including over cards.</p><div class="forge-dice-picks"><button class="btn forge-dice-pick" type="button" data-create-die="plus"><strong>+1/+1 die</strong><span>6-sided counter die</span></button><button class="btn forge-dice-pick" type="button" data-create-die="minus"><strong>−1/−1 die</strong><span>6-sided counter die</span></button><button class="btn forge-dice-pick primary" type="button" data-create-die="d20"><strong>D20</strong><span>Values 1–20</span></button></div><p class="forge-dice-help"><strong>Drag</strong> a die to move it. <strong>Shift-drag</strong> or <strong>right-drag</strong> to turn it through its faces. Mouse wheel or the −/+ hover controls also change the face. Dice stay above cards and stacks.</p></section>`;
+        document.body.appendChild(modal);
+        modal.querySelector('[data-close-dice]')?.addEventListener('click', () => closeModal('forge-dice-modal'));
+        modal.addEventListener('mousedown', e => { if (e.target === modal) closeModal('forge-dice-modal'); });
+        modal.addEventListener('click', e => {
+          const pick = e.target.closest?.('[data-create-die]');
+          if (!pick) return;
+          createDie(pick.dataset.createDie);
+        });
+      }
+
+      document.getElementById('forge-dice-btn')?.addEventListener('click', () => openModal('forge-dice-modal'));
+
+      const grid = document.querySelector('#tools-modal .tool-grid');
+      if (grid && !document.getElementById('tool-dice')) {
+        const tile = document.createElement('button');
+        tile.id = 'tool-dice';
+        tile.className = 'tool-tile';
+        tile.type = 'button';
+        tile.innerHTML = '<strong>Create tabletop dice</strong><span>Place +/+, −/−, or D20 dice over cards.</span>';
+        const tokenTile = document.getElementById('tool-token');
+        if (tokenTile?.parentElement === grid) tokenTile.insertAdjacentElement('afterend', tile);
+        else grid.appendChild(tile);
+        tile.addEventListener('click', () => { closeModal('tools-modal'); openModal('forge-dice-modal'); });
+      }
+    }
+
+    const forgeDiceBaseRender = render;
+    render = function() {
+      forgeDiceBaseRender();
+      renderDice();
+    };
+
+    installDiceUi();
+    ensureDiceState();
+    requestAnimationFrame(renderDice);
+  })();
