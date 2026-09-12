@@ -22,6 +22,28 @@
       });
     }
 
+    function bottomAllVisibleSnapshotCards() {
+      if (!snapshotIsActive()) return;
+      const ids = visibleSnapshotIds();
+      if (!ids.length) return;
+
+      checkpoint();
+
+      // Remove the remaining revealed cards from wherever they currently sit
+      // in the top portion, then append them together to the library bottom.
+      // Preserve their current reveal order; this keeps the action predictable
+      // while still making Winota/Satoru-style cleanup one click.
+      const moving = new Set(ids);
+      state.zones.library = state.zones.library.filter(id => !moving.has(id));
+      state.zones.library.push(...ids);
+
+      logEvent(`Put ${ids.length} revealed card${ids.length === 1 ? '' : 's'} on the bottom of the library.`);
+      render();
+      scheduleSave();
+      renderZoneModal();
+      toast(`Bottomed ${ids.length} card${ids.length === 1 ? '' : 's'}.`);
+    }
+
     function enforceSnapshotDom() {
       if (!snapshotIsActive() || enforcingSnapshotDom) return;
       const grid = $('#zone-card-grid');
@@ -82,7 +104,7 @@
       tools.innerHTML = '';
 
       // Looking at a fixed reveal should not expose a changing live-library list.
-      tools.innerHTML = `<span class="muted-block">Showing only the original top ${forgeTopNSnapshot.limit}. Moving a revealed card away will not reveal a replacement.</span>`;
+      tools.innerHTML = `<button class="btn tiny primary" type="button" data-forge-top-n-bottom-all ${ids.length ? '' : 'disabled'}>Bottom all${ids.length ? ` (${ids.length})` : ''}</button><span class="muted-block">Showing only the original top ${forgeTopNSnapshot.limit}. Moving a revealed card away will not reveal a replacement.</span>`;
 
       for (const id of ids) {
         const c = card(id);
@@ -112,6 +134,17 @@
 
       requestAnimationFrame(enforceSnapshotDom);
     };
+
+    const topNTools = document.getElementById('zone-modal-tools');
+    if (topNTools) {
+      topNTools.addEventListener('click', e => {
+        const button = e.target.closest?.('[data-forge-top-n-bottom-all]');
+        if (!button || button.disabled) return;
+        e.preventDefault();
+        e.stopPropagation();
+        bottomAllVisibleSnapshotCards();
+      });
+    }
 
     // Hard guard: if any other UI path repaints the zone modal with the live top
     // of library, remove cards that were not in the original reveal set.
