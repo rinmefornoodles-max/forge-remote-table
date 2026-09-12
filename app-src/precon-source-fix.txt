@@ -1,0 +1,19 @@
+
+
+  // Keep the existing precon UI, but make its old Commander Forge data URLs
+  // resolve to Forge Remote Table's own same-origin catalog. This removes the
+  // dependency on the now-private Commander Forge GitHub Pages deployment.
+  (() => {
+    const legacyPrefix = 'https://rinmefornoodles-max.github.io/commander-forge/data/precons/';
+    const baseFetch = window.fetch.bind(window);
+
+    window.fetch = function(input, init) {
+      const raw = typeof input === 'string' ? input : input?.url;
+      if (raw && raw.startsWith(legacyPrefix)) {
+        const suffix = raw.slice(legacyPrefix.length).replace(/^\/+/, '');
+        const localUrl = new URL(`./data/precons/${suffix}`, window.location.href).href;
+        return baseFetch(localUrl, init);
+      }
+      return baseFetch(input, init);
+    };
+  })();
