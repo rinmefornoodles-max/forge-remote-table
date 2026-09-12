@@ -24,6 +24,7 @@
     './app-src/top-n-snapshot.txt',
     './app-src/precon-source-fix.txt',
     './app-src/any-card-search.txt',
+    './app-src/tabletop-dice.txt',
     './app-src/part-04.txt'
   ];
 
