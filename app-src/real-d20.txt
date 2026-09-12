@@ -1,0 +1,197 @@
+
+  // High-quality persistent D20 renderer.
+  // Projects a real icosahedron in SVG so turning the die keeps a full D20
+  // silhouette instead of flattening a 2D shell into a thin sliver.
+  (() => {
+    const PHI = (1 + Math.sqrt(5)) / 2;
+    const VERTICES = [
+      [-1, PHI, 0], [1, PHI, 0], [-1, -PHI, 0], [1, -PHI, 0],
+      [0, -1, PHI], [0, 1, PHI], [0, -1, -PHI], [0, 1, -PHI],
+      [PHI, 0, -1], [PHI, 0, 1], [-PHI, 0, -1], [-PHI, 0, 1]
+    ];
+    const FACES = [
+      [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+      [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+      [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+      [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]
+    ];
+    let framePending = false;
+
+    function installRealD20Style() {
+      if (document.getElementById('forge-real-d20-style')) return;
+      const style = document.createElement('style');
+      style.id = 'forge-real-d20-style';
+      style.textContent = `
+        #battlefield .forge-table-die.forge-die-d20{
+          width:92px!important;height:92px!important;
+          filter:drop-shadow(0 10px 8px rgba(0,0,0,.60))!important;
+        }
+        #battlefield .forge-die-d20:hover{
+          filter:drop-shadow(0 12px 10px rgba(0,0,0,.68)) brightness(1.025)!important;
+        }
+        #battlefield .forge-die-d20 .forge-die-scene{
+          width:88px!important;height:88px!important;perspective:none!important;
+        }
+        #battlefield .forge-die-d20 .forge-d20-solid{
+          width:86px!important;height:86px!important;
+          transform:none!important;
+          transform-style:flat!important;
+        }
+        #battlefield .forge-die-d20 .forge-d20-shell{
+          position:absolute!important;inset:0!important;
+          clip-path:none!important;background:none!important;
+          box-shadow:none!important;filter:none!important;
+          overflow:visible!important;
+        }
+        #battlefield .forge-die-d20 .forge-d20-number{display:none!important}
+        .forge-real-d20-svg{
+          display:block;width:100%;height:100%;overflow:visible;
+          filter:drop-shadow(0 4px 3px rgba(0,0,0,.42));
+        }
+        .forge-real-d20-face{
+          stroke:#63391f;stroke-width:1.15;stroke-linejoin:round;
+          vector-effect:non-scaling-stroke;
+        }
+        .forge-real-d20-edge{
+          fill:none;stroke:rgba(64,32,17,.78);stroke-width:.75;
+          vector-effect:non-scaling-stroke;pointer-events:none;
+        }
+        .forge-real-d20-num{
+          font-family:Georgia,'Times New Roman',serif;font-weight:800;
+          fill:#2b2019;stroke:rgba(240,164,105,.22);stroke-width:.42;
+          paint-order:stroke fill;dominant-baseline:middle;text-anchor:middle;
+          pointer-events:none;
+        }
+        .forge-real-d20-num.is-top{
+          font-size:15px;font-weight:900;fill:#21160f;
+          stroke:rgba(255,190,132,.34);stroke-width:.6;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const rad = value => Number(value || 0) * Math.PI / 180;
+    const clamp01 = n => Math.max(0, Math.min(1, n));
+    const normalize = v => {
+      const len = Math.hypot(v[0], v[1], v[2]) || 1;
+      return [v[0]/len, v[1]/len, v[2]/len];
+    };
+    const cross = (a,b) => [
+      a[1]*b[2]-a[2]*b[1],
+      a[2]*b[0]-a[0]*b[2],
+      a[0]*b[1]-a[1]*b[0]
+    ];
+    const sub = (a,b) => [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+    const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+
+    function rotatePoint(point, rx, ry, rz) {
+      let [x,y,z] = point;
+      let c=Math.cos(rx), s=Math.sin(rx);
+      [y,z] = [y*c-z*s, y*s+z*c];
+      c=Math.cos(ry); s=Math.sin(ry);
+      [x,z] = [x*c+z*s, -x*s+z*c];
+      c=Math.cos(rz); s=Math.sin(rz);
+      [x,y] = [x*c-y*s, x*s+y*c];
+      return [x,y,z];
+    }
+
+    function colorForLight(amount) {
+      const t = clamp01(amount);
+      const shadow = [91,43,24], mid = [171,91,50], high = [226,145,88];
+      const mix = (a,b,x) => a.map((v,i)=>Math.round(v+(b[i]-v)*x));
+      const rgb = t < .55 ? mix(shadow,mid,t/.55) : mix(mid,high,(t-.55)/.45);
+      return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    }
+
+    function renderRealD20(el, die) {
+      const shell = el.querySelector('.forge-d20-shell');
+      if (!shell) return;
+      const rx = rad(die.rx), ry = rad(die.ry), rz = rad(die.rz);
+      const rotated = VERTICES.map(v => rotatePoint(v,rx,ry,rz));
+      const camera = 5.0;
+      const scale = 28.5;
+      const center = 50;
+      const projected = rotated.map(([x,y,z]) => {
+        const perspective = camera / (camera - z * .34);
+        return [center + x*scale*perspective, center - y*scale*perspective, z];
+      });
+      const lightDir = normalize([-0.5,0.7,1.15]);
+      const visible = [];
+
+      FACES.forEach((face,index) => {
+        const a=rotated[face[0]], b=rotated[face[1]], c=rotated[face[2]];
+        let normal = cross(sub(b,a),sub(c,a));
+        const centroid=[(a[0]+b[0]+c[0])/3,(a[1]+b[1]+c[1])/3,(a[2]+b[2]+c[2])/3];
+        if (dot(normal,centroid) < 0) normal = normal.map(v=>-v);
+        normal = normalize(normal);
+        if (normal[2] <= -.02) return;
+        const light = .30 + .70 * Math.max(0,dot(normal,lightDir));
+        visible.push({face,index,centroid,normal,light});
+      });
+      visible.sort((a,b)=>a.centroid[2]-b.centroid[2]);
+      if (!visible.length) return;
+      const front = visible.reduce((best,item)=>item.centroid[2] > best.centroid[2] ? item : best, visible[0]);
+
+      const used = new Set([die.value]);
+      function labelFor(item) {
+        if (item === front) return die.value;
+        let candidate = ((Number(die.value)||1) + item.index*7 + 3) % 20 + 1;
+        while (used.has(candidate)) candidate = candidate % 20 + 1;
+        used.add(candidate);
+        return candidate;
+      }
+
+      const polygons = [];
+      const labels = [];
+      for (const item of visible) {
+        const pts = item.face.map(i=>projected[i]);
+        const pointString = pts.map(p=>`${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ');
+        polygons.push(`<polygon class="forge-real-d20-face" points="${pointString}" fill="${colorForLight(item.light)}"/>`);
+        const cx=(pts[0][0]+pts[1][0]+pts[2][0])/3;
+        const cy=(pts[0][1]+pts[1][1]+pts[2][1])/3;
+        const label=labelFor(item);
+        const size=item===front?15:Math.max(7.5,10.5 + item.centroid[2]*1.25);
+        labels.push(`<text class="forge-real-d20-num${item===front?' is-top':''}" x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" style="font-size:${size.toFixed(1)}px">${label}</text>`);
+      }
+
+      shell.innerHTML = `<svg class="forge-real-d20-svg" viewBox="0 0 100 100" aria-label="D20 showing ${die.value}"><defs><radialGradient id="forgeCopperGlow" cx="30%" cy="20%" r="80%"><stop offset="0" stop-color="#ffd0a0" stop-opacity=".25"/><stop offset=".55" stop-color="#8f4829" stop-opacity="0"/><stop offset="1" stop-color="#3b1c10" stop-opacity=".18"/></radialGradient></defs>${polygons.join('')}<circle cx="50" cy="50" r="38" fill="url(#forgeCopperGlow)" pointer-events="none"/>${labels.join('')}</svg>`;
+    }
+
+    function findDie(id) {
+      return Array.isArray(state?.dice) ? state.dice.find(d=>d?.id===id) : null;
+    }
+
+    function renderAllRealD20s() {
+      framePending = false;
+      installRealD20Style();
+      document.querySelectorAll('#battlefield .forge-table-die.forge-die-d20').forEach(el => {
+        const die = findDie(el.dataset.dieId);
+        if (die) renderRealD20(el,die);
+      });
+    }
+
+    function scheduleRealD20Render() {
+      if (framePending) return;
+      framePending = true;
+      requestAnimationFrame(renderAllRealD20s);
+    }
+
+    const battlefield = document.getElementById('battlefield');
+    if (battlefield) {
+      new MutationObserver(scheduleRealD20Render).observe(battlefield, {
+        childList:true, subtree:true, attributes:true, attributeFilter:['style']
+      });
+    }
+    document.addEventListener('pointermove', e => {
+      if (document.querySelector('#battlefield .forge-die-d20.is-turning')) scheduleRealD20Render();
+    }, true);
+
+    const forgeRealD20BaseRender = render;
+    render = function() {
+      forgeRealD20BaseRender();
+      scheduleRealD20Render();
+    };
+
+    installRealD20Style();
+    requestAnimationFrame(renderAllRealD20s);
+  })();
