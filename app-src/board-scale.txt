@@ -1,0 +1,98 @@
+
+  // Keep browser zoom at 100% while scaling only tabletop cards/chrome.
+  // This preserves sharp UI/text and high-resolution card art while creating board space.
+  (() => {
+    const SCALE_KEY = 'forge-remote-table-board-scale-v1';
+    const MIN = .60, MAX = 1.00, DEFAULT = .72;
+
+    function preferredScale() {
+      const fromState = Number(state?.boardScale);
+      if (Number.isFinite(fromState)) return clamp(fromState, MIN, MAX);
+      const saved = Number(localStorage.getItem(SCALE_KEY));
+      return Number.isFinite(saved) && saved >= MIN && saved <= MAX ? saved : DEFAULT;
+    }
+
+    function ensureScale() {
+      const scale = preferredScale();
+      state.boardScale = scale;
+      return scale;
+    }
+
+    function applyScale(scale, save=false) {
+      scale = clamp(Number(scale)||DEFAULT, MIN, MAX);
+      state.boardScale = scale;
+      const root = document.documentElement;
+      const cardW = Math.round(170 * scale);
+      const cardH = Math.round(237 * scale);
+      const rail = Math.round(Math.max(118, 190 * scale));
+      const handH = Math.round(Math.max(184, 38 + cardH * .95));
+      const handInner = Math.max(146, handH - 38);
+      const handLift = Math.round(Math.max(54, 104 * scale));
+      root.style.setProperty('--card-w', `${cardW}px`);
+      root.style.setProperty('--card-h', `${cardH}px`);
+      root.style.setProperty('--forge-rail-w', `${rail}px`);
+      root.style.setProperty('--forge-hand-h', `${handH}px`);
+      root.style.setProperty('--forge-hand-inner-h', `${handInner}px`);
+      root.style.setProperty('--forge-hand-lift', `${handLift}px`);
+      root.style.setProperty('--forge-board-scale', String(scale));
+
+      const range = document.getElementById('forge-board-scale-range');
+      const value = document.getElementById('forge-board-scale-value');
+      if (range) range.value = String(Math.round(scale * 100));
+      if (value) value.textContent = `${Math.round(scale * 100)}%`;
+
+      if (save) {
+        try { localStorage.setItem(SCALE_KEY, String(scale)); } catch {}
+        scheduleSave();
+      }
+      requestAnimationFrame(() => {
+        try { forgeLayoutHand?.(); } catch {}
+      });
+    }
+
+    function installStyle() {
+      if (document.getElementById('forge-board-scale-style')) return;
+      const style = document.createElement('style');
+      style.id = 'forge-board-scale-style';
+      style.textContent = `
+        .table-shell{grid-template-columns:var(--forge-rail-w,136px) minmax(0,1fr) var(--forge-rail-w,136px)!important}
+        .hand-shell{height:var(--forge-hand-h,209px)!important}
+        .hand{height:var(--forge-hand-inner-h,171px)!important}
+        .hand .remote-card.forge-hand-focus{transform:translateY(calc(-1 * var(--forge-hand-lift,75px))) rotate(0deg) scale(1.34)!important}
+        .zone-preview .remote-card{transform:scale(.52)!important;margin:calc(var(--card-h) * -.18)!important}
+        .forge-board-scale-control{display:flex;align-items:center;gap:7px;padding:4px 8px;border:1px solid var(--line);border-radius:9px;background:#0d1513;min-width:190px}
+        .forge-board-scale-control label{display:flex;align-items:center;gap:5px;color:#b9c6c0;font-size:10px;font-weight:800;white-space:nowrap}
+        .forge-board-scale-control input{width:90px;padding:0;accent-color:var(--gold);cursor:pointer}
+        .forge-board-scale-control strong{min-width:34px;text-align:right;color:var(--gold-bright);font-size:10px}
+        .forge-board-scale-reset{border:0;background:transparent;color:#8fa09a;font-size:10px;cursor:pointer;padding:2px 3px}
+        .forge-board-scale-reset:hover{color:#f1c779}
+        @media(max-width:900px){.forge-board-scale-control{min-width:150px}.forge-board-scale-control input{width:60px}}
+      `;
+      document.head.appendChild(style);
+    }
+
+    function installControl() {
+      const actions = document.querySelector('.battlefield-actions');
+      if (!actions || document.getElementById('forge-board-scale-control')) return;
+      const wrap = document.createElement('div');
+      wrap.id = 'forge-board-scale-control';
+      wrap.className = 'forge-board-scale-control';
+      wrap.innerHTML = `<label title="Scale only the tabletop, not the browser">Board <input id="forge-board-scale-range" type="range" min="60" max="100" step="2" value="72"></label><strong id="forge-board-scale-value">72%</strong><button class="forge-board-scale-reset" type="button" title="Recommended compact size">Fit</button>`;
+      actions.prepend(wrap);
+      const range = wrap.querySelector('#forge-board-scale-range');
+      range.addEventListener('input', () => applyScale(Number(range.value)/100, false));
+      range.addEventListener('change', () => applyScale(Number(range.value)/100, true));
+      wrap.querySelector('.forge-board-scale-reset').addEventListener('click', () => applyScale(DEFAULT, true));
+    }
+
+    installStyle();
+    installControl();
+    applyScale(ensureScale(), false);
+
+    const baseRender = render;
+    render = function() {
+      baseRender();
+      installControl();
+      applyScale(ensureScale(), false);
+    };
+  })();
