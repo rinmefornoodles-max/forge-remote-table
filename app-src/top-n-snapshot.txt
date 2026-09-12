@@ -164,7 +164,8 @@
 
   // Treat the right-click card inspector like a normal context menu: a primary
   // click/tap anywhere outside it dismisses it, while interactions inside the
-  // menu remain untouched.
+  // menu remain untouched. Capture phase makes the menu disappear before the
+  // tabletop responds to the outside click.
   (() => {
     document.addEventListener('pointerdown', e => {
       if (e.button != null && e.button !== 0) return;
