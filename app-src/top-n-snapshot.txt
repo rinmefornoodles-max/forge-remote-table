@@ -161,3 +161,17 @@
       if (close) forgeTopNSnapshot = null;
     }, true);
   })();
+
+  // Treat the right-click card inspector like a normal context menu: a primary
+  // click/tap anywhere outside it dismisses it, while interactions inside the
+  // menu remain untouched.
+  (() => {
+    document.addEventListener('pointerdown', e => {
+      if (e.button != null && e.button !== 0) return;
+      const inspector = document.getElementById('inspector');
+      if (!inspector || inspector.hidden) return;
+      const menu = inspector.querySelector('.inspector-modal');
+      if (menu && menu.contains(e.target)) return;
+      closeModal('inspector');
+    }, true);
+  })();
