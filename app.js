@@ -43,3 +43,5 @@
     }
   }
 })();
+
+// Deployment refresh for the physical tabletop dice context-menu redesign.
